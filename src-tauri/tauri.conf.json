@@ -51,7 +51,7 @@
         "type": "embedBootstrapper"
       },
       "wix": {
-        "language": ["es-MX", "en-US"]
+        "language": ["es-ES", "en-US"]
       },
       "nsis": {
         "languages": ["Spanish", "English"],
