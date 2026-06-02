@@ -1,0 +1,64 @@
+name: Build & release Windows
+
+on:
+  # Run on tag push like v0.1.0 → creates a published Release with the binaries
+  push:
+    tags:
+      - "v*"
+  # Run on every push to main → builds and uploads as a draft release for testing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri (Windows)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # When triggered by a `v*` tag, this creates a GitHub Release with that name
+          tagName: ${{ github.ref_name }}
+          releaseName: "Nihongo ${{ github.ref_name }}"
+          releaseBody: |
+            ## Descarga
+
+            - **Windows installer (recomendado)** → `Nihongo_*-setup.exe`
+            - **Windows MSI** → `Nihongo_*.msi`
+
+            ### Primera apertura
+            Windows te dirá "no se reconoce este editor". Pulsa **"Más información" → "Ejecutar de todas formas"**.
+
+            ### Datos locales
+            Tu base de datos vive en `%APPDATA%\com.nihongo.app\nihongo.db`. Cada usuario es independiente.
+          releaseDraft: false
+          prerelease: false
+          # Build both NSIS and MSI installers (matches tauri.conf.json targets)
+          args: ""
