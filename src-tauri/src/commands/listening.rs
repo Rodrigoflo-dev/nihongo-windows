@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use tauri::State;
@@ -89,44 +87,9 @@ fn read_dialogue(conn: &Connection, id: i64) -> AppResult<ListeningDialogue> {
     .map_err(|e| AppError::Database(format!("read dialogue {id}: {e}")))
 }
 
-/// Use Windows SAPI (via PowerShell + System.Speech.Synthesis) to synthesize
-/// Japanese speech. The `voice` parameter is ignored on Windows — we just
-/// pick the first installed Japanese (ja-*) voice. Rate is mapped from the
-/// shared cross-platform "words per minute" to SAPI's -10..10 scale.
-///
-/// **Requires**: Japanese language pack installed on Windows
-/// (Settings → Time & Language → Language → Add a language → 日本語).
-#[tauri::command]
-pub async fn play_japanese_tts(text: String, _voice: Option<String>, rate: Option<i32>) -> AppResult<()> {
-    let rate_wpm = rate.unwrap_or(170).clamp(80, 240);
-    // Map words-per-minute (80..240, default 170) to SAPI rate (-10..10).
-    let sapi_rate = ((rate_wpm - 170) / 8).clamp(-10, 10);
-    let escaped = text.replace('\'', "''");
-
-    let script = format!(
-        r#"Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$v = $s.GetInstalledVoices() | Where-Object {{ $_.VoiceInfo.Culture.Name -like 'ja-*' }} | Select-Object -First 1
-if ($v) {{ $s.SelectVoice($v.VoiceInfo.Name) }}
-$s.Rate = {sapi_rate}
-$s.Speak('{escaped}')"#
-    );
-
-    tokio::task::spawn_blocking(move || {
-        let status = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .status()
-            .map_err(|e| AppError::Other(format!("could not spawn powershell: {e}")))?;
-        if !status.success() {
-            return Err(AppError::Other(format!(
-                "TTS falló. ¿Tienes el paquete de idioma japonés instalado en Windows?"
-            )));
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("tts join error: {e}")))?
-}
+// Japanese text-to-speech is now handled entirely in the frontend via the
+// WebView's Web Speech API (see src/lib/tts.ts). The previous macOS `say`
+// implementation did not work on Windows (no audio + a stray console window).
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
