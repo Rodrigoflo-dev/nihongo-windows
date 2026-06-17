@@ -13,9 +13,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { KanjiTile } from "@/components/kanji/kanji-tile";
+import { RomajiLine } from "@/components/lesson/romaji-line";
 import { PageHeader } from "@/components/layout/page-header";
 import { useIntroduceKanji, useKanjiList, useReviewQueue } from "@/hooks/use-kanji";
 import { useUserProfile } from "@/hooks/use-user-profile";
+import { cn } from "@/lib/utils";
 
 export default function KanjiPage() {
   const { data: profile } = useUserProfile();
@@ -44,6 +46,11 @@ export default function KanjiPage() {
 
   const dueCount = queue?.due.length ?? 0;
   const newAvailable = queue?.newAvailable ?? grouped.new.length;
+
+  const total = list?.length ?? 0;
+  const masteredCount = grouped.mastered.length;
+  const learningCount = grouped.learning.length;
+  const masteryPct = total > 0 ? Math.round((masteredCount / total) * 100) : 0;
 
   if (isLoading) {
     return (
@@ -77,6 +84,56 @@ export default function KanjiPage() {
           </Button>
         }
       />
+
+      {/* Mastery progress (gamified overview) */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="rounded-3xl glass-strong p-6"
+      >
+        <div className="flex items-end justify-between">
+          <div>
+            <p className="font-jp text-[11px] tracking-[0.3em] text-muted-foreground">
+              漢字マスター — {level}
+            </p>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight">
+              {masteredCount}
+              <span className="text-base font-medium text-muted-foreground">
+                {" "}/ {total} dominados
+              </span>
+            </h2>
+          </div>
+          <div className="text-right">
+            <p className="text-3xl font-bold tabular-nums gradient-text">
+              {masteryPct}%
+            </p>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+              del nivel
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-secondary/50">
+          <motion.div
+            className="h-full rounded-full bg-gradient-to-r from-success via-neon-cyan to-primary"
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.max(2, masteryPct)}%` }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+          />
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <MasteryStat label="Aprendiendo" value={learningCount} tone="primary" />
+          <MasteryStat label="Por descubrir" value={newAvailable} tone="muted" />
+          <MasteryStat label="Dominados" value={masteredCount} tone="success" />
+        </div>
+        <p className="mt-4 text-xs text-muted-foreground">
+          {masteryPct >= 100
+            ? "¡Dominaste todo este nivel! Sube de objetivo en Ajustes para más kanji. 🎉"
+            : dueCount > 0
+              ? `Tienes ${dueCount} repaso${dueCount === 1 ? "" : "s"} listo${dueCount === 1 ? "" : "s"} — cada repaso correcto sube tu dominio.`
+              : "Introduce kanji nuevos y practícalos. Solo cuentan como “dominados” tras repasarlos bien varias veces (SRS)."}
+        </p>
+      </motion.div>
 
       {grouped.learning.length > 0 ? (
         <Section
@@ -159,6 +216,34 @@ export default function KanjiPage() {
   );
 }
 
+function MasteryStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "primary" | "success" | "muted";
+}) {
+  return (
+    <div className="rounded-xl border bg-card/50 px-3 py-2.5 text-center">
+      <p
+        className={cn(
+          "text-xl font-bold tabular-nums",
+          tone === "primary" && "text-primary",
+          tone === "success" && "text-success",
+          tone === "muted" && "text-foreground/70"
+        )}
+      >
+        {value}
+      </p>
+      <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </p>
+    </div>
+  );
+}
+
 interface SectionProps {
   title: string;
   jp: string;
@@ -225,6 +310,12 @@ function NewKanjiTile({
             .slice(0, 2)
             .join(" · ") || "—"}
         </p>
+        <RomajiLine
+          reading={[...item.kanji.onyomi, ...item.kanji.kunyomi]
+            .slice(0, 2)
+            .join(" · ")}
+          className="text-[10px]"
+        />
       </div>
       <Button
         size="sm"

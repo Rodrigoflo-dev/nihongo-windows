@@ -8,15 +8,18 @@ import {
   GraduationCap,
   Headphones,
   Home,
+  LogOut,
   type LucideIcon,
   Mic,
   PenTool,
+  RotateCcw,
   ScrollText,
   Settings as SettingsIcon,
   TrendingUp,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useSession } from "@/stores/session";
 import { SidebarPlayer } from "./sidebar-player";
 
 interface NavItem {
@@ -29,6 +32,7 @@ interface NavItem {
 const PRIMARY_NAV: NavItem[] = [
   { to: "/", label: "Inicio", icon: Home, jp: "ホーム" },
   { to: "/learn", label: "Curso", icon: GraduationCap, jp: "授業" },
+  { to: "/repaso", label: "Repaso", icon: RotateCcw, jp: "復習" },
   { to: "/kanji", label: "Kanji", icon: PenTool, jp: "漢字" },
   { to: "/grammar", label: "Gramática", icon: BookOpen, jp: "文法" },
   { to: "/journal", label: "Diario", icon: Feather, jp: "日記" },
@@ -94,16 +98,16 @@ function NavItemLink({ to, label, icon: Icon, jp }: NavItem) {
 }
 
 export function Sidebar() {
+  const lock = useSession((s) => s.lock);
   return (
     <motion.aside
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.45, ease: [0.21, 1.02, 0.73, 1] }}
-      className="relative z-10 flex h-full w-64 flex-col gap-5 border-r border-sidebar-border/60 bg-sidebar/40 px-3 pt-12 pb-4 backdrop-blur-xl"
-      data-tauri-drag-region
+      className="relative z-10 flex h-full w-64 shrink-0 flex-col gap-5 overflow-y-auto border-r border-sidebar-border/60 bg-sidebar/40 px-3 pt-12 pb-4 backdrop-blur-xl"
     >
       {/* Brand */}
-      <div className="px-3" data-tauri-no-drag>
+      <div className="shrink-0 px-3" data-tauri-no-drag>
         <p className="font-jp text-xs tracking-[0.4em] text-sidebar-foreground/45">
           にほんご
         </p>
@@ -113,23 +117,38 @@ export function Sidebar() {
       </div>
 
       {/* Primary nav */}
-      <nav className="flex flex-col gap-1 px-1" data-tauri-no-drag>
+      <nav className="flex shrink-0 flex-col gap-1 px-1" data-tauri-no-drag>
         {PRIMARY_NAV.map((item) => (
           <NavItemLink key={item.to} {...item} />
         ))}
       </nav>
 
-      {/* Spacer */}
-      <div className="flex-1" />
+      {/* Spacer — collapses to 0 when content overflows so the list scrolls */}
+      <div className="min-h-2 flex-1" />
 
       {/* Player badge */}
-      <SidebarPlayer />
+      <div className="shrink-0">
+        <SidebarPlayer />
+      </div>
 
       {/* Secondary nav */}
-      <nav className="flex flex-col gap-1 px-1" data-tauri-no-drag>
+      <nav className="flex shrink-0 flex-col gap-1 px-1" data-tauri-no-drag>
         {SECONDARY_NAV.map((item) => (
           <NavItemLink key={item.to} {...item} />
         ))}
+        <button
+          onClick={lock}
+          data-tauri-no-drag
+          className={cn(
+            "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200",
+            "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          )}
+        >
+          <LogOut className="size-4 shrink-0 text-sidebar-foreground/55" />
+          <span className="flex-1 truncate text-left font-medium">
+            Cerrar sesión
+          </span>
+        </button>
       </nav>
     </motion.aside>
   );

@@ -17,8 +17,10 @@ import { toKana, toRomaji } from "wanakana";
 
 import { Button } from "@/components/ui/button";
 import { JapaneseKeyboard } from "@/components/lesson/japanese-keyboard";
-import { StrokeTrainer } from "@/components/kanji/stroke-trainer";
+import { RomajiLine } from "@/components/lesson/romaji-line";
+import { StrokeTrainer, type StrokeProgress } from "@/components/kanji/stroke-trainer";
 import { usePlayTts } from "@/hooks/use-listening";
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
 import { api } from "@/lib/api";
 import type { Activity } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -48,6 +50,99 @@ function TtsErrorNote({ message }: { message: string | null }) {
       {message}
     </p>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Smart, encouraging feedback for free-text sentence answers.
+// ---------------------------------------------------------------------------
+
+function normalizeSentence(s: string): string {
+  return s.trim().replace(/[。、.\s]+$/g, "").replace(/\s+/g, "");
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const prev = new Array(n + 1);
+  const cur = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= n; j++) prev[j] = cur[j];
+  }
+  return prev[n];
+}
+
+export interface SentenceVerdict {
+  correct: boolean;
+  tone: "success" | "close" | "wrong";
+  title: string;
+  detail?: string;
+}
+
+/**
+ * Compare a learner's answer to the accepted variants and return warm,
+ * specific feedback so the app visibly "pays attention" to their mistakes.
+ */
+export function evaluateSentence(
+  raw: string,
+  accepted: string[]
+): SentenceVerdict {
+  const v = normalizeSentence(raw);
+  const variants = accepted.map(normalizeSentence).filter(Boolean);
+  if (variants.includes(v)) {
+    return { correct: true, tone: "success", title: "¡Perfecto! 🎉 Lo escribiste tal cual." };
+  }
+  // Closest accepted variant by edit distance.
+  let best = variants[0] ?? "";
+  let bestDist = Infinity;
+  for (const t of variants) {
+    const d = levenshtein(v, t);
+    if (d < bestDist) {
+      bestDist = d;
+      best = t;
+    }
+  }
+  const diff = v.length - best.length;
+  if (bestDist <= 2 && v.length > 0) {
+    if (diff < 0) {
+      return {
+        correct: false,
+        tone: "close",
+        title: "¡Casi! Te falta un poquito ✍️",
+        detail: `Escribiste ${v.length} caracteres y la respuesta tiene ${best.length}. Revisa si te faltó una partícula o el final です/ます.`,
+      };
+    }
+    if (diff > 0) {
+      return {
+        correct: false,
+        tone: "close",
+        title: "¡Casi! Pusiste algo de más ✂️",
+        detail: `Sobra ${diff} carácter${diff === 1 ? "" : "es"}. Quita lo extra y vuelve a intentar.`,
+      };
+    }
+    return {
+      correct: false,
+      tone: "close",
+      title: "¡Muy cerca! Solo un carácter distinto 🔍",
+      detail: "Compara con la versión natural de abajo y corrige el carácter.",
+    };
+  }
+  if (v.length === 0) {
+    return { correct: false, tone: "wrong", title: "Escribe tu intento antes de verificar ✏️" };
+  }
+  return {
+    correct: false,
+    tone: "wrong",
+    title: "Aún no es correcto — ¡tú puedes! 💪",
+    detail: "Apóyate en la pista y en el teclado. Mira la versión natural de abajo.",
+  };
 }
 
 function ModeTab({
@@ -218,6 +313,7 @@ function IntroKanji({
             <p className="font-jp text-xs text-muted-foreground">
               {activity.example.reading}
             </p>
+            <RomajiLine reading={activity.example.reading} />
             <p className="mt-1 text-sm text-muted-foreground">
               {activity.example.meaning}
             </p>
@@ -249,6 +345,9 @@ function ReadingBlock({
       <p className="mt-1 font-jp text-base">
         {readings.length > 0 ? readings.join(" · ") : "—"}
       </p>
+      {readings.length > 0 ? (
+        <RomajiLine reading={readings.join(" · ")} />
+      ) : null}
     </div>
   );
 }
@@ -273,6 +372,7 @@ function IntroVocab({
           <h2 className="font-jp text-4xl font-medium tracking-tight">
             {activity.word}
           </h2>
+          <RomajiLine reading={activity.reading} className="text-center" />
           <p className="text-xl text-foreground/80">{activity.meaning}</p>
         </div>
         <Button
@@ -332,6 +432,7 @@ function IntroGrammar({
           <p className="font-jp text-xs text-muted-foreground">
             {activity.example.reading}
           </p>
+          <RomajiLine reading={activity.example.reading} />
           <p className="mt-1 text-sm text-muted-foreground">
             {activity.example.meaning}
           </p>
@@ -575,149 +676,13 @@ function ListeningActivity({
 // 6. Speaking — with mic permission flow
 // ---------------------------------------------------------------------------
 
-/**
- * Pick a mime type the current browser actually supports. WKWebView (Tauri's
- * default on macOS) tends to support `audio/mp4` (AAC) but NOT `audio/webm`,
- * which is why earlier playback was silent — we recorded mp4 but wrapped it
- * in a Blob tagged as webm, so the <audio> element couldn't decode it.
- */
-function pickRecordingMimeType(): string {
-  if (typeof MediaRecorder === "undefined") return "";
-  const candidates = [
-    "audio/mp4;codecs=mp4a.40.2",
-    "audio/mp4",
-    "audio/aac",
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/ogg;codecs=opus",
-    "audio/ogg",
-  ];
-  for (const c of candidates) {
-    try {
-      if (MediaRecorder.isTypeSupported(c)) return c;
-    } catch {
-      /* ignore */
-    }
-  }
-  return "";
-}
-
 function SpeakingActivity({
   activity,
 }: {
   activity: Extract<Activity, { kind: "speaking" }>;
 }) {
   const play = usePlayTts();
-  const [recording, setRecording] = useState(false);
-  const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
-  const [permError, setPermError] = useState<string | null>(null);
-  const [recordingLevel, setRecordingLevel] = useState(0);
-  const [recordedDuration, setRecordedDuration] = useState<number | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const recordingMimeRef = useRef<string>("");
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationRef = useRef<number | null>(null);
-  const recordingStartRef = useRef<number>(0);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-      audioCtxRef.current?.close().catch(() => {});
-      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const start = async () => {
-    setPermError(null);
-    setRecordedDuration(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      // Pick a mime type the browser actually supports.
-      const mime = pickRecordingMimeType();
-      recordingMimeRef.current = mime;
-      const recorder = mime
-        ? new MediaRecorder(stream, { mimeType: mime })
-        : new MediaRecorder(stream);
-
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onstop = () => {
-        // Use the actual recorder.mimeType so the Blob matches what was recorded
-        const usedType = recorder.mimeType || mime || "audio/mp4";
-        const blob = new Blob(chunksRef.current, { type: usedType });
-        const url = URL.createObjectURL(blob);
-        setRecordedUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return url;
-        });
-        setRecordedDuration((Date.now() - recordingStartRef.current) / 1000);
-        stream.getTracks().forEach((t) => t.stop());
-        if (animationRef.current) cancelAnimationFrame(animationRef.current);
-        setRecordingLevel(0);
-      };
-
-      // Volume meter so the user gets visual feedback that mic actually works
-      const ctx = new AudioContext();
-      audioCtxRef.current = ctx;
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-      const buf = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        analyser.getByteTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) {
-          const v = (buf[i] - 128) / 128;
-          sum += v * v;
-        }
-        const rms = Math.sqrt(sum / buf.length);
-        setRecordingLevel(Math.min(1, rms * 3));
-        animationRef.current = requestAnimationFrame(tick);
-      };
-      tick();
-
-      recorder.start(250); // emit chunks every 250ms so something is always buffered
-      recordingStartRef.current = Date.now();
-      recorderRef.current = recorder;
-      setRecording(true);
-    } catch (err) {
-      const e = err as DOMException;
-      if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
-        setPermError(
-          "macOS bloqueó el micrófono. Abre Ajustes del Sistema → Privacidad y seguridad → Micrófono y activa Nihongo."
-        );
-      } else if (e.name === "NotFoundError") {
-        setPermError("No detecté un micrófono conectado.");
-      } else {
-        setPermError(`No pude acceder al micrófono: ${e.message ?? e.name}`);
-      }
-    }
-  };
-
-  const stop = () => {
-    try {
-      recorderRef.current?.stop();
-    } catch {
-      /* ignore */
-    }
-    setRecording(false);
-  };
+  const rec = useVoiceRecorder();
 
   return (
     <ActivityShell eyebrow="Practica tu voz" jp="話してみよう">
@@ -726,6 +691,7 @@ function SpeakingActivity({
           {activity.reading}
         </p>
         <p className="mt-3 font-jp text-3xl leading-tight">{activity.textJp}</p>
+        <RomajiLine reading={activity.reading} className="mt-1 text-center" />
         <p className="mt-2 text-sm text-muted-foreground">{activity.meaning}</p>
         <Button
           className="mt-5"
@@ -747,41 +713,41 @@ function SpeakingActivity({
 
       <div className="grid grid-cols-2 gap-3">
         <button
-          onClick={recording ? stop : start}
+          onClick={rec.recording ? rec.stop : rec.start}
           className={cn(
             "flex flex-col items-center gap-2 rounded-2xl glass p-5 transition-all",
-            recording && "ring-2 ring-destructive bg-destructive/5"
+            rec.recording && "ring-2 ring-destructive bg-destructive/5"
           )}
         >
           <div
             className={cn(
               "flex size-14 items-center justify-center rounded-full",
-              recording
+              rec.recording
                 ? "bg-destructive text-destructive-foreground"
                 : "bg-gradient-to-br from-primary via-neon-violet to-neon-cyan text-primary-foreground"
             )}
             style={
-              recording
+              rec.recording
                 ? {
-                    boxShadow: `0 0 ${20 + recordingLevel * 60}px ${
-                      4 + recordingLevel * 16
+                    boxShadow: `0 0 ${20 + rec.level * 60}px ${
+                      4 + rec.level * 16
                     }px color-mix(in oklch, var(--color-destructive) ${
-                      30 + recordingLevel * 40
+                      30 + rec.level * 40
                     }%, transparent)`,
                   }
                 : undefined
             }
           >
-            {recording ? <Square className="size-6" /> : <Mic className="size-6" />}
+            {rec.recording ? <Square className="size-6" /> : <Mic className="size-6" />}
           </div>
           <p className="text-xs font-medium">
-            {recording ? "Detener" : recordedUrl ? "Repetir grabación" : "Grabar"}
+            {rec.recording ? "Detener" : rec.recordedUrl ? "Repetir grabación" : "Grabar"}
           </p>
-          {recording ? (
+          {rec.recording ? (
             <div className="mt-1 flex h-1.5 w-24 items-center overflow-hidden rounded-full bg-secondary/50">
               <div
-                className="h-full rounded-full bg-destructive transition-[width] duration-75"
-                style={{ width: `${Math.round(recordingLevel * 100)}%` }}
+                className="h-full rounded-full bg-destructive transition-[width] duration-150"
+                style={{ width: `${Math.round(rec.level * 100)}%` }}
               />
             </div>
           ) : null}
@@ -789,13 +755,13 @@ function SpeakingActivity({
         <div
           className={cn(
             "flex flex-col items-center gap-2 rounded-2xl glass p-5 transition-all",
-            !recordedUrl && "opacity-50"
+            !rec.recordedUrl && "opacity-50"
           )}
         >
           <div
             className={cn(
               "flex size-14 items-center justify-center rounded-full",
-              recordedUrl
+              rec.recordedUrl
                 ? "bg-gradient-to-br from-success to-neon-cyan text-primary-foreground"
                 : "bg-secondary text-muted-foreground"
             )}
@@ -803,9 +769,9 @@ function SpeakingActivity({
             <Play className="size-6" />
           </div>
           <p className="text-xs font-medium">Tu grabación</p>
-          {recordedDuration ? (
+          {rec.recordedDuration ? (
             <p className="text-[10px] tabular-nums text-muted-foreground">
-              {recordedDuration.toFixed(1)}s
+              {rec.recordedDuration.toFixed(1)}s
             </p>
           ) : (
             <p className="text-[10px] text-muted-foreground">Sin grabar aún</p>
@@ -813,30 +779,26 @@ function SpeakingActivity({
         </div>
       </div>
 
-      {/* Tip when recording but no signal — likely wrong input device */}
-      {recording && recordingLevel < 0.02 ? (
+      {/* Sustained-silence tip (stable, no flicker) */}
+      {rec.recording && rec.silent ? (
         <p className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
           No detecto sonido. Verifica que tu mic esté seleccionado en Ajustes de
           macOS → Sonido → Entrada.
         </p>
       ) : null}
 
-      {/* Prominent native player with controls — most reliable playback path */}
-      {recordedUrl ? (
+      {/* Native player with controls — most reliable playback path */}
+      {rec.recordedUrl ? (
         <div className="space-y-2 rounded-2xl glass p-4">
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
             ▶ Tu voz grabada — pulsa play para escucharte
           </p>
           <audio
-            ref={audioRef}
-            src={recordedUrl}
+            src={rec.recordedUrl}
             preload="auto"
             controls
             controlsList="nodownload"
             className="w-full"
-            onError={() => {
-              console.error("Audio playback failed for", recordedUrl);
-            }}
           />
           <p className="text-[10px] text-muted-foreground">
             Compara con la "Escuchar nativa" arriba para ajustar tu pronunciación.
@@ -844,9 +806,9 @@ function SpeakingActivity({
         </div>
       ) : null}
 
-      {permError ? (
+      {rec.error ? (
         <div className="space-y-3 rounded-2xl border border-warning/40 bg-warning/5 p-5 text-sm text-warning">
-          <p>{permError}</p>
+          <p>{rec.error}</p>
           <div className="flex gap-2">
             <Button
               size="sm"
@@ -856,18 +818,10 @@ function SpeakingActivity({
               <ExternalLink className="size-3.5" />
               Abrir Ajustes
             </Button>
-            <Button size="sm" variant="ghost" onClick={start}>
+            <Button size="sm" variant="ghost" onClick={rec.start}>
               Reintentar
             </Button>
           </div>
-          <p className="text-xs leading-relaxed text-warning/80">
-            En modo desarrollo macOS a veces no muestra el dialog. Si no
-            aparece Nihongo en la lista, ejecuta una vez{" "}
-            <code className="rounded bg-warning/20 px-1.5 py-0.5 font-mono text-[10px]">
-              npm run tauri build
-            </code>{" "}
-            y abre el .app generado para que el sistema registre los permisos.
-          </p>
         </div>
       ) : null}
     </ActivityShell>
@@ -885,6 +839,16 @@ function WriteKanjiActivity({
   activity: Extract<Activity, { kind: "write_kanji" }>;
   onComplete: () => void;
 }) {
+  const [progress, setProgress] = useState<StrokeProgress>({
+    hasData: true,
+    passed: false,
+    mistakes: 0,
+  });
+  // Real validation: if the kanji has stroke data, the learner must complete
+  // the writing quiz. If there's no data (trace fallback), we can't validate
+  // strokes, so we allow continuing.
+  const canContinue = progress.passed || !progress.hasData;
+
   return (
     <ActivityShell eyebrow="Escribe el kanji" jp="書いてみよう">
       <div className="rounded-3xl glass-strong p-8">
@@ -894,10 +858,15 @@ function WriteKanjiActivity({
           <p className="font-jp text-xs text-muted-foreground">
             {activity.reading}
           </p>
+          <RomajiLine reading={activity.reading} className="text-center" />
         </div>
 
         <div className="mt-6 flex justify-center">
-          <StrokeTrainer char={activity.kanjiChar} size={240} />
+          <StrokeTrainer
+            char={activity.kanjiChar}
+            size={240}
+            onProgress={setProgress}
+          />
         </div>
 
         {activity.note ? (
@@ -907,8 +876,21 @@ function WriteKanjiActivity({
           </p>
         ) : null}
 
-        <Button size="lg" className="mt-6 w-full" onClick={onComplete}>
-          <Check className="size-4" /> Lo practiqué
+        {progress.hasData && !progress.passed ? (
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Pulsa <span className="font-medium text-foreground">Practicar</span> y
+            escribe el kanji trazo por trazo para continuar.
+          </p>
+        ) : null}
+
+        <Button
+          size="lg"
+          className="mt-3 w-full"
+          disabled={!canContinue}
+          onClick={onComplete}
+        >
+          <Check className="size-4" />
+          {canContinue ? "Continuar" : "Practica el trazo para continuar"}
         </Button>
       </div>
     </ActivityShell>
@@ -1026,14 +1008,13 @@ function WriteSentenceActivity({
     setValue(converted);
   };
 
-  const normalize = (s: string) =>
-    s.trim().replace(/[。、\s]+$/g, "").replace(/\s+/g, "");
+  const verdict = useMemo(
+    () => evaluateSentence(value, activity.accepted),
+    [value, activity.accepted]
+  );
 
   const check = () => {
-    const v = normalize(value);
-    const accepted = activity.accepted.map(normalize);
-    const ok = accepted.includes(v);
-    onAnswer(ok);
+    onAnswer(verdict.correct);
   };
 
   return (
@@ -1145,6 +1126,28 @@ function WriteSentenceActivity({
 
         {verified ? (
           <div className="space-y-3">
+            <motion.div
+              initial={{ opacity: 0, y: 8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ duration: 0.3 }}
+              className={cn(
+                "rounded-xl border p-3 text-sm font-medium",
+                verdict.tone === "success" && "border-success/40 bg-success/10 text-success",
+                verdict.tone === "close" && "border-warning/40 bg-warning/10 text-warning",
+                verdict.tone === "wrong" && "border-destructive/30 bg-destructive/10 text-destructive"
+              )}
+            >
+              <p>{verdict.title}</p>
+              {verdict.detail ? (
+                <p className="mt-1 text-xs font-normal opacity-90">{verdict.detail}</p>
+              ) : null}
+              {!verdict.correct && value.trim() ? (
+                <p className="mt-2 text-xs font-normal">
+                  <span className="opacity-70">Tu intento: </span>
+                  <span className="font-jp text-sm">{value.trim()}</span>
+                </p>
+              ) : null}
+            </motion.div>
             <div className="rounded-xl border border-success/30 bg-success/5 p-3">
               <p className="text-[10px] uppercase tracking-widest text-success">
                 Versión natural
