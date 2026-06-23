@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  ArrowRight,
   Check,
   ExternalLink,
+  GraduationCap,
   Info,
   Keyboard,
   Lightbulb,
@@ -16,6 +18,7 @@ import {
 import { toKana, toRomaji } from "wanakana";
 
 import { Button } from "@/components/ui/button";
+import { HudPanel } from "@/components/visual/hud-panel";
 import { JapaneseKeyboard } from "@/components/lesson/japanese-keyboard";
 import { RomajiLine } from "@/components/lesson/romaji-line";
 import { StrokeTrainer, type StrokeProgress } from "@/components/kanji/stroke-trainer";
@@ -183,25 +186,27 @@ function ActivityShell({
   children: React.ReactNode;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -16 }}
-      transition={{ duration: 0.32, ease: [0.21, 1.02, 0.73, 1] }}
-      className="mx-auto w-full max-w-2xl space-y-6"
-    >
-      <div className="text-center">
-        {jp ? (
-          <p className="font-jp text-[11px] tracking-[0.4em] text-primary">
-            {jp}
+    <div className="w-full [perspective:1400px]">
+      <motion.div
+        initial={{ opacity: 0, y: 18, rotateX: 7 }}
+        animate={{ opacity: 1, y: 0, rotateX: 0 }}
+        exit={{ opacity: 0, y: -16, rotateX: -5 }}
+        transition={{ duration: 0.4, ease: [0.21, 1.02, 0.73, 1] }}
+        className="mx-auto w-full max-w-3xl space-y-6 [transform-style:preserve-3d]"
+      >
+        <div className="text-center">
+          {jp ? (
+            <p className="font-jp text-[11px] tracking-[0.4em] text-primary">
+              {jp}
+            </p>
+          ) : null}
+          <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-neon-cyan">
+            {eyebrow}
           </p>
-        ) : null}
-        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-          {eyebrow}
-        </p>
-      </div>
-      {children}
-    </motion.div>
+        </div>
+        {children}
+      </motion.div>
+    </div>
   );
 }
 
@@ -214,6 +219,8 @@ export interface ActivityRenderProps {
   verified: boolean;
   attempt: number;
   onAnswer: (correct: boolean) => void;
+  /** Jump to learn this kanji/word (in-lesson if possible). */
+  onLearn?: (target: string) => void;
 }
 
 export function ActivityView({
@@ -221,6 +228,7 @@ export function ActivityView({
   verified,
   attempt,
   onAnswer,
+  onLearn,
 }: ActivityRenderProps) {
   switch (activity.kind) {
     case "intro_kanji":
@@ -236,6 +244,7 @@ export function ActivityView({
           activity={activity}
           verified={verified}
           onAnswer={onAnswer}
+          onLearn={onLearn}
         />
       );
     case "listening":
@@ -245,6 +254,7 @@ export function ActivityView({
           activity={activity}
           verified={verified}
           onAnswer={onAnswer}
+          onLearn={onLearn}
         />
       );
     case "speaking":
@@ -289,15 +299,30 @@ function IntroKanji({
 }) {
   return (
     <ActivityShell eyebrow="Nuevo kanji" jp="新しい漢字">
-      <div className="rounded-3xl glass-strong p-10">
-        <div className="text-center">
+      <div className="hud-frame relative overflow-hidden rounded-3xl glass-strong p-10">
+        {/* HUD scanline + corner brackets */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-3xl">
+          <div className="animate-scanline absolute left-0 h-10 w-full bg-gradient-to-b from-transparent via-neon-cyan/8 to-transparent" />
+        </div>
+        <span className="hud-corner left-3 top-3 border-l-2 border-t-2" />
+        <span className="hud-corner right-3 top-3 border-r-2 border-t-2" />
+        <span className="hud-corner bottom-3 left-3 border-b-2 border-l-2" />
+        <span className="hud-corner bottom-3 right-3 border-b-2 border-r-2" />
+
+        <div className="relative text-center">
           <div className="relative inline-flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full bg-gradient-to-br from-primary via-neon-violet to-neon-cyan opacity-30 blur-2xl" />
-            <span className="relative font-jp text-[140px] leading-none">
+            <div className="absolute inset-0 animate-pulse rounded-full bg-gradient-to-br from-primary via-neon-violet to-neon-cyan opacity-30 blur-2xl" />
+            <span
+              className="animate-holo-float relative font-jp text-[150px] leading-none text-primary"
+              style={{
+                textShadow:
+                  "0 0 22px color-mix(in oklch, var(--color-primary) 75%, transparent), 0 0 48px color-mix(in oklch, var(--color-neon-violet) 50%, transparent)",
+              }}
+            >
               {activity.kanjiChar}
             </span>
           </div>
-          <p className="mt-4 text-2xl font-semibold tracking-tight">
+          <p className="mt-4 font-display text-2xl font-bold tracking-tight">
             {activity.meaning}
           </p>
         </div>
@@ -338,8 +363,8 @@ function ReadingBlock({
   readings: string[];
 }) {
   return (
-    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-      <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+    <div className="relative rounded-xl border border-l-2 border-border/50 border-l-neon-cyan/60 bg-card/50 p-4">
+      <p className="font-mono text-[10px] uppercase tracking-widest text-neon-cyan/90">
         {label}
       </p>
       <p className="mt-1 font-jp text-base">
@@ -364,41 +389,63 @@ function IntroVocab({
   const play = usePlayTts();
   return (
     <ActivityShell eyebrow="Nueva palabra" jp="新しい単語">
-      <div className="rounded-3xl glass-strong p-10 text-center">
-        <div className="space-y-2">
-          <p className="font-jp text-[10px] tracking-[0.4em] text-muted-foreground">
+      <HudPanel glow className="p-10 text-center">
+        {/* radial holo backdrop */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-16 size-56 -translate-x-1/2 rounded-full bg-gradient-to-br from-primary/25 via-neon-violet/15 to-transparent blur-3xl"
+        />
+        <div className="relative space-y-3 [perspective:900px]">
+          <p className="font-mono text-[10px] tracking-[0.4em] text-neon-cyan/80">
             {activity.reading}
           </p>
-          <h2 className="font-jp text-4xl font-medium tracking-tight">
+          {/* Holographic 3D word — the centerpiece */}
+          <motion.h2
+            initial={{ opacity: 0, rotateX: 25, y: 12 }}
+            animate={{ opacity: 1, rotateX: 0, y: 0 }}
+            transition={{ duration: 0.6, ease: [0.21, 1.02, 0.73, 1] }}
+            className="animate-holo-float font-jp text-6xl font-semibold tracking-tight text-primary [transform-style:preserve-3d]"
+            style={{
+              textShadow:
+                "0 0 24px color-mix(in oklch, var(--color-primary) 70%, transparent), 0 0 56px color-mix(in oklch, var(--color-neon-violet) 45%, transparent)",
+            }}
+          >
             {activity.word}
-          </h2>
+          </motion.h2>
           <RomajiLine reading={activity.reading} className="text-center" />
-          <p className="text-xl text-foreground/80">{activity.meaning}</p>
+          <p className="font-display text-xl font-bold text-foreground/90">
+            {activity.meaning}
+          </p>
         </div>
         <Button
           variant="outline"
-          className="mt-5"
+          className="group relative mt-6 overflow-hidden border-neon-cyan/40 text-neon-cyan hover:border-neon-cyan hover:text-neon-cyan"
           disabled={play.isPending}
           onClick={() =>
             play.mutate({ text: activity.word, voice: "Kyoko", rate: 160 })
           }
         >
-          <Volume2 className="size-4" />
-          Escuchar
+          <span className="absolute inset-0 shimmer opacity-0 transition-opacity group-hover:opacity-30" />
+          <Volume2 className={cn("size-4", play.isPending && "animate-pulse")} />
+          {play.isPending ? "Sonando…" : "Escuchar"}
         </Button>
         <TtsErrorNote message={play.ttsError} />
         {activity.example ? (
-          <div className="mt-6 rounded-xl bg-accent/30 p-4 text-left">
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              Ejemplo
+          <div className="relative mt-7 rounded-xl border border-l-2 border-border/40 border-l-neon-cyan/60 bg-card/40 p-4 text-left">
+            <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-neon-cyan/90">
+              例 · Ejemplo
             </p>
-            <p className="mt-1 font-jp text-lg">{activity.example}</p>
-            <p className="mt-1 font-mono text-xs text-muted-foreground">
-              {toRomaji(activity.example)}
-            </p>
+            <p className="mt-1.5 font-jp text-lg">{activity.example}</p>
+            {/* Only show romaji for kana-only examples — converting mixed
+                kanji+kana produces junk like "私ha学生desu.". */}
+            {!/[㐀-鿿]/.test(activity.example) ? (
+              <p className="mt-1 font-mono text-xs text-muted-foreground">
+                {toRomaji(activity.example)}
+              </p>
+            ) : null}
           </div>
         ) : null}
-      </div>
+      </HudPanel>
     </ActivityShell>
   );
 }
@@ -414,21 +461,22 @@ function IntroGrammar({
 }) {
   return (
     <ActivityShell eyebrow="Nueva gramática" jp="新しい文法">
-      <div className="rounded-3xl glass-strong p-10">
-        <h2 className="text-balance text-2xl font-semibold tracking-tight">
+      <HudPanel glow className="p-10">
+        <h2 className="font-display text-balance text-2xl font-extrabold tracking-tight">
           {activity.title}
         </h2>
-        <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-2 font-jp text-base text-primary">
+        <div className="relative mt-5 inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-4 py-2 font-jp text-base text-primary shadow-[0_0_24px_-8px_color-mix(in_oklch,var(--color-primary)_60%,transparent)]">
+          <span className="size-1.5 animate-pulse rounded-full bg-neon-cyan" />
           {activity.pattern}
         </div>
         <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
           {activity.explanation}
         </p>
-        <div className="mt-6 rounded-xl border border-success/30 bg-success/5 p-4">
-          <p className="text-[10px] uppercase tracking-widest text-success">
-            Ejemplo
+        <div className="mt-6 rounded-xl border border-l-2 border-success/30 border-l-success/70 bg-success/5 p-4">
+          <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-success">
+            例 · Ejemplo
           </p>
-          <p className="mt-1 font-jp text-lg">{activity.example.jp}</p>
+          <p className="mt-1.5 font-jp text-lg">{activity.example.jp}</p>
           <p className="font-jp text-xs text-muted-foreground">
             {activity.example.reading}
           </p>
@@ -437,7 +485,7 @@ function IntroGrammar({
             {activity.example.meaning}
           </p>
         </div>
-      </div>
+      </HudPanel>
     </ActivityShell>
   );
 }
@@ -450,10 +498,12 @@ function QuizActivity({
   activity,
   verified,
   onAnswer,
+  onLearn,
 }: {
   activity: Extract<Activity, { kind: "quiz" }>;
   verified: boolean;
   onAnswer: (correct: boolean) => void;
+  onLearn?: (target: string) => void;
 }) {
   // Shuffle options once per activity mount so the correct answer doesn't
   // always sit in the same slot.
@@ -474,10 +524,16 @@ function QuizActivity({
 
   return (
     <ActivityShell eyebrow="Pregunta" jp="質問">
-      <div className="rounded-3xl glass-strong p-10">
+      <HudPanel className="p-10">
         <div className="text-center">
           {activity.promptJp ? (
-            <p className="font-jp text-3xl leading-tight tracking-tight">
+            <p
+              className="font-jp text-3xl leading-tight tracking-tight text-foreground"
+              style={{
+                textShadow:
+                  "0 0 24px color-mix(in oklch, var(--color-primary) 35%, transparent)",
+              }}
+            >
               {activity.promptJp}
             </p>
           ) : null}
@@ -496,31 +552,44 @@ function QuizActivity({
             const isPicked = selectedShuffled === idx;
             const romaji = romajiHint(opt.text);
             return (
-              <button
+              <motion.button
                 key={`${activity.id}-${idx}`}
+                whileHover={!verified ? { x: 4 } : undefined}
+                whileTap={!verified ? { scale: 0.99 } : undefined}
                 disabled={verified}
                 onClick={() => {
                   setSelectedShuffled(idx);
                   onAnswer(opt.isCorrect);
                 }}
                 className={cn(
-                  "rounded-xl border bg-card/60 px-5 py-3 text-left transition-all",
-                  "hover:border-primary/40 hover:bg-accent/30",
+                  "group relative flex items-center gap-4 overflow-hidden rounded-xl border border-border/60 bg-card/50 px-5 py-3.5 text-left transition-all",
+                  "hover:border-neon-cyan/50 hover:bg-accent/20 hover:shadow-[0_0_24px_-10px_color-mix(in_oklch,var(--color-neon-cyan)_70%,transparent)]",
                   isPicked &&
                     !verified &&
-                    "border-primary bg-primary/5 ring-2 ring-primary/20",
+                    "border-primary bg-primary/10 ring-1 ring-primary/40",
                   verified && opt.isCorrect && "border-success bg-success/15 text-success",
                   verified && isPicked && !opt.isCorrect && "border-destructive bg-destructive/15 text-destructive",
-                  verified && !opt.isCorrect && !isPicked && "opacity-60"
+                  verified && !opt.isCorrect && !isPicked && "opacity-50"
                 )}
               >
-                <div className="font-jp text-base">{opt.text}</div>
-                {romaji ? (
-                  <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                    {romaji}
-                  </div>
-                ) : null}
-              </button>
+                <span
+                  className={cn(
+                    "flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 font-mono text-[11px] text-muted-foreground transition-colors",
+                    "group-hover:border-neon-cyan/60 group-hover:text-neon-cyan",
+                    isPicked && !verified && "border-primary/60 text-primary"
+                  )}
+                >
+                  {String.fromCharCode(65 + idx)}
+                </span>
+                <div className="min-w-0">
+                  <div className="font-jp text-base">{opt.text}</div>
+                  {romaji ? (
+                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                      {romaji}
+                    </div>
+                  ) : null}
+                </div>
+              </motion.button>
             );
           })}
         </div>
@@ -532,9 +601,14 @@ function QuizActivity({
           <ExplanationCard
             correctAnswer={activity.options[activity.correctIndex]}
             explanation={activity.explanation}
+            onLearn={onLearn}
+            learnTarget={
+              japaneseToken(activity.promptJp) ??
+              japaneseToken(activity.options[activity.correctIndex])
+            }
           />
         ) : null}
-      </div>
+      </HudPanel>
     </ActivityShell>
   );
 }
@@ -547,10 +621,12 @@ function ListeningActivity({
   activity,
   verified,
   onAnswer,
+  onLearn,
 }: {
   activity: Extract<Activity, { kind: "listening" }>;
   verified: boolean;
   onAnswer: (correct: boolean) => void;
+  onLearn?: (target: string) => void;
 }) {
   const play = usePlayTts();
   const [rate, setRate] = useState(160);
@@ -570,30 +646,40 @@ function ListeningActivity({
 
   return (
     <ActivityShell eyebrow="Listening" jp="聴解">
-      <div className="rounded-3xl glass-strong p-10 text-center">
-        <button
-          disabled={play.isPending}
-          onClick={() =>
-            play.mutate({
-              text: activity.textJp,
-              voice: activity.voice,
-              rate,
-            })
-          }
-          className={cn(
-            "relative mx-auto flex size-24 items-center justify-center rounded-full",
-            "bg-gradient-to-br from-primary via-neon-violet to-neon-cyan text-primary-foreground",
-            "shadow-[0_24px_60px_-12px_color-mix(in_oklch,var(--color-primary)_55%,transparent)]",
-            "transition-all hover:scale-105 disabled:opacity-70"
-          )}
-        >
+      <HudPanel glow className="p-10 text-center">
+        <div className="relative mx-auto flex size-24 items-center justify-center">
+          {/* Pulsing concentric rings — alive while playing */}
           {play.isPending ? (
-            <Volume2 className="size-9 animate-pulse" />
-          ) : (
-            <Play className="size-9" />
-          )}
-        </button>
-        <p className="mt-3 text-xs text-muted-foreground">
+            <>
+              <span className="absolute inset-0 animate-ping rounded-full bg-neon-cyan/30" />
+              <span className="absolute -inset-3 animate-pulse rounded-full border border-neon-cyan/40" />
+            </>
+          ) : null}
+          <span className="absolute -inset-2 rounded-full border border-primary/20" />
+          <button
+            disabled={play.isPending}
+            onClick={() =>
+              play.mutate({
+                text: activity.textJp,
+                voice: activity.voice,
+                rate,
+              })
+            }
+            className={cn(
+              "relative flex size-24 items-center justify-center rounded-full",
+              "bg-gradient-to-br from-primary via-neon-violet to-neon-cyan text-primary-foreground",
+              "shadow-[0_24px_60px_-12px_color-mix(in_oklch,var(--color-primary)_55%,transparent)]",
+              "transition-all hover:scale-105 disabled:opacity-70"
+            )}
+          >
+            {play.isPending ? (
+              <Volume2 className="size-9 animate-pulse" />
+            ) : (
+              <Play className="size-9" />
+            )}
+          </button>
+        </div>
+        <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.25em] text-neon-cyan/80">
           {play.isPending ? "Reproduciendo…" : "Pulsa para escuchar"}
         </p>
         <div className="mt-3 inline-flex gap-2">
@@ -613,7 +699,7 @@ function ListeningActivity({
           ))}
         </div>
         <TtsErrorNote message={play.ttsError} />
-      </div>
+      </HudPanel>
 
       <div className="rounded-3xl glass p-6">
         <p className="text-base font-semibold">{activity.prompt}</p>
@@ -622,31 +708,44 @@ function ListeningActivity({
             const isPicked = selectedShuffled === idx;
             const romaji = romajiHint(opt.text);
             return (
-              <button
+              <motion.button
                 key={`${activity.id}-${idx}`}
+                whileHover={!verified ? { x: 4 } : undefined}
+                whileTap={!verified ? { scale: 0.99 } : undefined}
                 disabled={verified}
                 onClick={() => {
                   setSelectedShuffled(idx);
                   onAnswer(opt.isCorrect);
                 }}
                 className={cn(
-                  "rounded-xl border bg-card/60 px-5 py-3 text-left transition-all",
-                  "hover:border-primary/40 hover:bg-accent/30",
+                  "group flex items-center gap-4 rounded-xl border border-border/60 bg-card/50 px-5 py-3.5 text-left transition-all",
+                  "hover:border-neon-cyan/50 hover:bg-accent/20 hover:shadow-[0_0_24px_-10px_color-mix(in_oklch,var(--color-neon-cyan)_70%,transparent)]",
                   isPicked &&
                     !verified &&
-                    "border-primary bg-primary/5 ring-2 ring-primary/20",
+                    "border-primary bg-primary/10 ring-1 ring-primary/40",
                   verified && opt.isCorrect && "border-success bg-success/15 text-success",
                   verified && isPicked && !opt.isCorrect && "border-destructive bg-destructive/15 text-destructive",
-                  verified && !opt.isCorrect && !isPicked && "opacity-60"
+                  verified && !opt.isCorrect && !isPicked && "opacity-50"
                 )}
               >
-                <div className="text-sm">{opt.text}</div>
-                {romaji ? (
-                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                    {romaji}
-                  </div>
-                ) : null}
-              </button>
+                <span
+                  className={cn(
+                    "flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 font-mono text-[11px] text-muted-foreground transition-colors",
+                    "group-hover:border-neon-cyan/60 group-hover:text-neon-cyan",
+                    isPicked && !verified && "border-primary/60 text-primary"
+                  )}
+                >
+                  {String.fromCharCode(65 + idx)}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm">{opt.text}</div>
+                  {romaji ? (
+                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                      {romaji}
+                    </div>
+                  ) : null}
+                </div>
+              </motion.button>
             );
           })}
         </div>
@@ -665,6 +764,11 @@ function ListeningActivity({
           <ExplanationCard
             correctAnswer={activity.options[activity.correctIndex]}
             explanation={activity.explanation}
+            onLearn={onLearn}
+            learnTarget={
+              japaneseToken(activity.textJp) ??
+              japaneseToken(activity.options[activity.correctIndex])
+            }
           />
         ) : null}
       </div>
@@ -686,11 +790,19 @@ function SpeakingActivity({
 
   return (
     <ActivityShell eyebrow="Practica tu voz" jp="話してみよう">
-      <div className="rounded-3xl glass-strong p-10 text-center">
-        <p className="font-jp text-[10px] tracking-[0.4em] text-muted-foreground">
+      <HudPanel glow className="p-10 text-center">
+        <p className="font-mono text-[10px] tracking-[0.4em] text-neon-cyan/80">
           {activity.reading}
         </p>
-        <p className="mt-3 font-jp text-3xl leading-tight">{activity.textJp}</p>
+        <p
+          className="mt-3 font-jp text-3xl leading-tight text-foreground"
+          style={{
+            textShadow:
+              "0 0 22px color-mix(in oklch, var(--color-primary) 45%, transparent)",
+          }}
+        >
+          {activity.textJp}
+        </p>
         <RomajiLine reading={activity.reading} className="mt-1 text-center" />
         <p className="mt-2 text-sm text-muted-foreground">{activity.meaning}</p>
         <Button
@@ -709,7 +821,7 @@ function SpeakingActivity({
           {play.isPending ? "Sonando…" : "Escuchar nativa"}
         </Button>
         <TtsErrorNote message={play.ttsError} />
-      </div>
+      </HudPanel>
 
       <div className="grid grid-cols-2 gap-3">
         <button
@@ -851,10 +963,18 @@ function WriteKanjiActivity({
 
   return (
     <ActivityShell eyebrow="Escribe el kanji" jp="書いてみよう">
-      <div className="rounded-3xl glass-strong p-8">
+      <HudPanel glow className="p-8">
         <div className="text-center">
-          <p className="font-jp text-5xl leading-none">{activity.kanjiChar}</p>
-          <p className="mt-3 text-sm font-medium">{activity.meaning}</p>
+          <p
+            className="animate-holo-float font-jp text-5xl leading-none text-primary"
+            style={{
+              textShadow:
+                "0 0 20px color-mix(in oklch, var(--color-primary) 60%, transparent), 0 0 44px color-mix(in oklch, var(--color-neon-violet) 40%, transparent)",
+            }}
+          >
+            {activity.kanjiChar}
+          </p>
+          <p className="mt-3 font-display text-sm font-bold">{activity.meaning}</p>
           <p className="font-jp text-xs text-muted-foreground">
             {activity.reading}
           </p>
@@ -892,7 +1012,7 @@ function WriteKanjiActivity({
           <Check className="size-4" />
           {canContinue ? "Continuar" : "Practica el trazo para continuar"}
         </Button>
-      </div>
+      </HudPanel>
     </ActivityShell>
   );
 }
@@ -1019,7 +1139,8 @@ function WriteSentenceActivity({
 
   return (
     <ActivityShell eyebrow="Escribe la oración" jp="文を書いてみよう">
-      <div className="rounded-3xl glass-strong space-y-5 p-8">
+      <HudPanel className="p-8">
+       <div className="space-y-5">
         <div>
           <p className="text-base text-foreground">{activity.prompt}</p>
           {activity.hint ? (
@@ -1162,7 +1283,8 @@ function WriteSentenceActivity({
             </p>
           </div>
         ) : null}
-      </div>
+       </div>
+      </HudPanel>
     </ActivityShell>
   );
 }
@@ -1178,14 +1300,23 @@ function SummaryActivity({
 }) {
   return (
     <ActivityShell eyebrow="Lección completada" jp="お疲れさま">
-      <div className="rounded-3xl glass-strong p-10">
+      <HudPanel glow className="p-10">
         <div className="flex items-center justify-center">
-          <div className="relative inline-flex size-20 items-center justify-center rounded-full bg-gradient-to-br from-warning via-streak to-neon-pink text-warning-foreground">
-            <Trophy className="size-9" />
-            <span className="absolute inset-0 rounded-full ring-1 ring-white/40" />
-          </div>
+          <motion.div
+            initial={{ scale: 0.6, rotate: -12, opacity: 0 }}
+            animate={{ scale: 1, rotate: 0, opacity: 1 }}
+            transition={{ type: "spring", stiffness: 200, damping: 14 }}
+            className="relative inline-flex size-20 items-center justify-center"
+          >
+            <span className="absolute -inset-3 animate-ping rounded-full bg-warning/20" />
+            <span className="absolute -inset-2 animate-pulse rounded-full border border-warning/40" />
+            <div className="animate-holo-float relative inline-flex size-20 items-center justify-center rounded-full bg-gradient-to-br from-warning via-streak to-neon-pink text-warning-foreground shadow-[0_0_40px_-6px_color-mix(in_oklch,var(--color-warning)_70%,transparent)]">
+              <Trophy className="size-9" />
+              <span className="absolute inset-0 rounded-full ring-1 ring-white/40" />
+            </div>
+          </motion.div>
         </div>
-        <h2 className="mt-5 text-center text-2xl font-semibold">¡Bien hecho!</h2>
+        <h2 className="mt-5 text-center font-display text-2xl font-extrabold">¡Bien hecho!</h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           Esto es lo que aprendiste en esta lección:
         </p>
@@ -1200,11 +1331,11 @@ function SummaryActivity({
             </li>
           ))}
         </ul>
-        <p className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary">
+        <p className="mt-5 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.15em] text-primary">
           <Sparkles className="size-3.5" />
           Vas a ganar XP al confirmar
         </p>
-      </div>
+      </HudPanel>
     </ActivityShell>
   );
 }
@@ -1213,13 +1344,25 @@ function SummaryActivity({
 // Shared explanation card
 // ---------------------------------------------------------------------------
 
+/** Returns the string if it contains Japanese (kana/kanji), else undefined. */
+function japaneseToken(s?: string | null): string | undefined {
+  return s && /[぀-ヿ㐀-鿿]/.test(s) ? s : undefined;
+}
+
 function ExplanationCard({
   correctAnswer,
   explanation,
+  onLearn,
+  learnTarget,
 }: {
   correctAnswer: string;
   explanation: string;
+  onLearn?: (target: string) => void;
+  /** The Japanese kanji/word to review (may differ from the answer, e.g. when
+   *  the answer is a Spanish meaning and the kanji is in the prompt). */
+  learnTarget?: string;
 }) {
+  const target = learnTarget ?? japaneseToken(correctAnswer);
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -1235,6 +1378,16 @@ function ExplanationCard({
         <span className="font-jp text-base text-success">{correctAnswer}</span>
       </p>
       <p className="text-sm leading-relaxed text-foreground/85">{explanation}</p>
+      {onLearn && target ? (
+        <button
+          onClick={() => onLearn(target)}
+          className="mt-1 inline-flex items-center gap-2 rounded-lg border border-neon-cyan/40 bg-neon-cyan/10 px-3 py-2 text-xs font-semibold text-neon-cyan transition-colors hover:bg-neon-cyan/15"
+        >
+          <GraduationCap className="size-4" />
+          Ir a la lección de {target}
+          <ArrowRight className="size-3.5" />
+        </button>
+      ) : null}
     </motion.div>
   );
 }

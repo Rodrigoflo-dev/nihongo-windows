@@ -124,6 +124,49 @@ pub fn get_lesson(db: State<'_, DbState>, lesson_id: i64) -> AppResult<Lesson> {
     db.with(|c| read_lesson(c, lesson_id))
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KanjiLessonRef {
+    pub lesson_id: i64,
+    pub title: String,
+}
+
+/// Find the lesson that teaches a given kanji or word, so the practice screen
+/// can offer "go learn this". Matches an intro_kanji's kanjiChar first, then an
+/// intro_vocab's word. Returns None if nothing teaches it yet.
+#[tauri::command]
+pub fn find_lesson_for_kanji(
+    db: State<'_, DbState>,
+    query: String,
+) -> AppResult<Option<KanjiLessonRef>> {
+    use rusqlite::OptionalExtension;
+    db.with(|c| {
+        // The query value is bound as a parameter (no SQL injection); only the
+        // LIKE wildcards are literal.
+        for key in ["kanjiChar", "word"] {
+            let pattern = format!("%\"{key}\":\"{query}\"%");
+            let found = c
+                .query_row(
+                    "SELECT id, title FROM lessons
+                      WHERE activities_json LIKE ?1
+                      ORDER BY ordering, id LIMIT 1",
+                    [pattern],
+                    |r| {
+                        Ok(KanjiLessonRef {
+                            lesson_id: r.get(0)?,
+                            title: r.get(1)?,
+                        })
+                    },
+                )
+                .optional()?;
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+        Ok(None)
+    })
+}
+
 fn read_lesson(c: &Connection, id: i64) -> AppResult<Lesson> {
     c.query_row(
         "SELECT l.id, l.unit_id, l.title, l.jp_title, l.summary, l.duration_minutes,
@@ -215,6 +258,7 @@ pub fn complete_lesson(
         )?;
 
         let now = Utc::now();
+        crate::commands::bump_daily_session(c, now, "lesson", result.seconds_spent)?;
         let xp = XP_LESSON_COMPLETE_BASE
             + result.correct_count * XP_LESSON_PER_CORRECT
             + if perfect { XP_LESSON_PERFECT_BONUS } else { 0 };
@@ -346,6 +390,57 @@ mod tests {
         crate::db::migrations::run(&conn).expect("migrations run clean");
         crate::seed::run_if_empty(&conn).expect("seed runs clean");
         conn
+    }
+
+    /// Store cosmetics (avatars/backgrounds) + extra themes must be seeded and
+    /// buyable (have a positive cost) so the profile customization works.
+    #[test]
+    fn store_cosmetics_and_themes_seeded() {
+        let conn = fresh_db();
+        let count = |kind: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM rewards WHERE kind = ?1 AND cost > 0",
+                [kind],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(count("avatar") >= 9, "avatars should be buyable in the store");
+        assert!(count("background") >= 4, "backgrounds should be buyable");
+        // Every theme except the base Aether is buyable: sakura, sumi, koi,
+        // matcha, sunset = 5.
+        assert!(count("theme") >= 5, "all non-base themes should be buyable");
+    }
+
+    /// Study time + active days must be recorded for EVERY activity type, not
+    /// just kanji review (regression: "Tiempo aprendido" / "Días activos" stuck
+    /// at 0 because only kanji called bump_daily_session). Verifies the shared
+    /// helper accumulates minutes, counts the day once, and tracks per-skill.
+    #[test]
+    fn bump_daily_session_accumulates_minutes_and_one_day() {
+        use chrono::TimeZone;
+        let conn = fresh_db();
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 23, 10, 0, 0).unwrap();
+
+        // Two activities the same day: a 5-min lesson and a 3-min listening.
+        crate::commands::bump_daily_session(&conn, now, "lesson", 300).unwrap();
+        crate::commands::bump_daily_session(&conn, now, "listening", 180).unwrap();
+
+        let (days, minutes, activities, listening): (i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(minutes_studied),0),
+                        COALESCE(SUM(activities_completed),0),
+                        COALESCE(SUM(listening_minutes),0)
+                   FROM daily_sessions",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(days, 1, "same day must be a single row");
+        assert_eq!(minutes, 8, "5 min + 3 min should accumulate to 8");
+        assert_eq!(activities, 2, "both activities counted");
+        assert_eq!(listening, 3, "listening minutes tracked separately");
     }
 
     /// Every lesson's activities_json must parse into LessonActivities and have

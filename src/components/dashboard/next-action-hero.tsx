@@ -64,6 +64,15 @@ export function NextActionHero({ action }: NextActionHeroProps) {
 
       {/* Card */}
       <div className="relative overflow-hidden rounded-3xl glass-strong">
+        {/* HUD corner brackets */}
+        <span className="hud-corner left-3 top-3 z-20 border-l-2 border-t-2" />
+        <span className="hud-corner right-3 top-3 z-20 border-r-2 border-t-2" />
+        <span className="hud-corner bottom-3 left-3 z-20 border-b-2 border-l-2" />
+        <span className="hud-corner bottom-3 right-3 z-20 border-b-2 border-r-2" />
+        {/* scanline */}
+        <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden rounded-3xl">
+          <div className="animate-scanline absolute left-0 h-12 w-full bg-gradient-to-b from-transparent via-neon-cyan/[0.06] to-transparent" />
+        </div>
         {/* Decorative gradient sheen */}
         <div
           aria-hidden
@@ -81,7 +90,7 @@ export function NextActionHero({ action }: NextActionHeroProps) {
         <div className="grid grid-cols-12 items-center gap-6 p-8">
           {/* Text + CTA */}
           <div className="relative z-10 col-span-7 space-y-5">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-background/30 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground backdrop-blur">
+            <div className="inline-flex items-center gap-2 rounded-full border border-neon-cyan/30 bg-background/30 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.2em] text-neon-cyan backdrop-blur">
               <span
                 className={cn(
                   "size-1.5 rounded-full",
@@ -97,7 +106,7 @@ export function NextActionHero({ action }: NextActionHeroProps) {
               <p className="font-jp text-xs tracking-[0.35em] text-muted-foreground">
                 {action.jpSubtitle}
               </p>
-              <h2 className="text-3xl font-semibold leading-tight tracking-tight text-balance md:text-4xl">
+              <h2 className="font-display text-3xl font-extrabold leading-tight tracking-tight text-balance md:text-4xl">
                 {action.title}
               </h2>
               <p className="max-w-md text-balance text-sm text-muted-foreground">
@@ -105,25 +114,44 @@ export function NextActionHero({ action }: NextActionHeroProps) {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <Button
-                size="xl"
-                asChild
-                className={cn(
-                  "group h-14 rounded-2xl px-6 text-base font-semibold",
-                  "bg-gradient-to-br from-primary via-primary to-neon-violet text-primary-foreground",
-                  "shadow-[0_20px_60px_-12px_color-mix(in_oklch,var(--color-primary)_60%,transparent)]",
-                  "hover:shadow-[0_24px_80px_-12px_color-mix(in_oklch,var(--color-primary)_80%,transparent)]",
-                  "transition-all"
-                )}
-              >
-                <Link to={action.modulePath}>
-                  <Icon className="size-5" />
-                  {action.ctaLabel}
-                  <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-                </Link>
-              </Button>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-background/50 px-3 py-1 text-xs text-muted-foreground backdrop-blur">
+            <div className="flex flex-wrap items-center gap-4 pt-1">
+              <div className="group relative inline-flex">
+                {/* Outer pulsing neon glow (behind, not clipped) */}
+                <span
+                  aria-hidden
+                  className="animate-glow-pulse absolute -inset-1 bg-gradient-to-r from-neon-violet via-primary to-neon-cyan opacity-55 blur-lg transition-opacity duration-300 group-hover:opacity-90"
+                />
+                <Button
+                  size="xl"
+                  asChild
+                  className={cn(
+                    "cta-clip relative h-14 overflow-hidden rounded-none px-7 text-base font-extrabold",
+                    "bg-gradient-to-r from-neon-violet via-primary to-neon-cyan text-background",
+                    "transition-all hover:brightness-110"
+                  )}
+                >
+                  <Link to={action.modulePath}>
+                    {/* top neon edge + sheen + HUD ticks */}
+                    <span
+                      aria-hidden
+                      className="absolute inset-x-0 top-0 h-px bg-white/70"
+                    />
+                    <span className="shimmer pointer-events-none absolute inset-0 opacity-40" />
+                    <span
+                      aria-hidden
+                      className="absolute right-1.5 top-1.5 size-2.5 border-r-2 border-t-2 border-background/40"
+                    />
+                    <span
+                      aria-hidden
+                      className="absolute bottom-1.5 left-1.5 size-2.5 border-b-2 border-l-2 border-background/40"
+                    />
+                    <Icon className="relative size-5" />
+                    <span className="relative">{action.ctaLabel}</span>
+                    <ArrowRight className="relative size-4 transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                </Button>
+              </div>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-background/50 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.15em] text-muted-foreground backdrop-blur">
                 <Clock className="size-3" />
                 ~{action.estimatedMinutes} min
               </span>
