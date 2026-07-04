@@ -166,10 +166,22 @@ function Tile({
   );
 }
 
-function Heatmap({ data }: { data: { date: string; minutes: number }[] }) {
+const HEATMAP_MONTHS = [
+  "ene", "feb", "mar", "abr", "may", "jun",
+  "jul", "ago", "sep", "oct", "nov", "dic",
+];
+type HeatCell = { date: string; minutes: number };
+
+/**
+ * Activity shown as a bar chart (Rodrigo's request): one bar per week over the
+ * last ~4 months, height = minutes studied that week. Clearer than a dot grid.
+ */
+function Heatmap({ data }: { data: HeatCell[] }) {
   const days = 112;
   const today = new Date();
-  const cells: { date: string; minutes: number }[] = [];
+
+  // Build the last `days` days (oldest → newest).
+  const cells: HeatCell[] = [];
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
@@ -177,33 +189,95 @@ function Heatmap({ data }: { data: { date: string; minutes: number }[] }) {
     const found = data.find((x) => x.date === iso);
     cells.push({ date: iso, minutes: found?.minutes ?? 0 });
   }
-  const tone = (m: number) => {
-    if (m === 0) return "bg-secondary/40";
-    if (m < 5) return "bg-primary/25";
-    if (m < 15) return "bg-primary/45";
-    if (m < 30) return "bg-primary/70";
-    return "bg-primary shadow-[0_0_8px_color-mix(in_oklch,var(--color-primary)_70%,transparent)]";
-  };
+
+  // Group into weeks (chunks of 7, oldest first) and sum minutes per week.
+  const weeks: { start: string; minutes: number }[] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    const chunk = cells.slice(i, i + 7);
+    weeks.push({
+      start: chunk[0].date,
+      minutes: chunk.reduce((s, c) => s + c.minutes, 0),
+    });
+  }
+
+  const maxWeek = Math.max(1, ...weeks.map((w) => w.minutes));
+  const activeDays = cells.filter((c) => c.minutes > 0).length;
+  const totalMinutes = cells.reduce((s, c) => s + c.minutes, 0);
+  const bestWeek = Math.max(0, ...weeks.map((w) => w.minutes));
+
+  // Month label under a bar the first time a week falls in a new month.
+  let lastMonth = -1;
+  const monthLabels = weeks.map((w) => {
+    const m = new Date(w.start + "T00:00:00").getMonth();
+    if (m !== lastMonth) {
+      lastMonth = m;
+      return HEATMAP_MONTHS[m];
+    }
+    return "";
+  });
+
+  const fmtDate = (iso: string) =>
+    new Date(iso + "T00:00:00").toLocaleDateString("es", {
+      day: "numeric",
+      month: "long",
+    });
+
   return (
-    <HudPanel glow className="p-4">
-      <div className="grid grid-flow-col grid-rows-7 gap-1">
-        {cells.map((c) => (
-          <div
-            key={c.date}
-            title={`${c.date}: ${c.minutes} min`}
-            className={cn(
-              "size-3 rounded-sm transition-all hover:scale-150 hover:ring-1 hover:ring-neon-cyan",
-              tone(c.minutes)
-            )}
-          />
+    <HudPanel glow className="p-5">
+      <p className="mb-4 text-xs text-muted-foreground">
+        Minutos que estudiaste por semana en los últimos ~4 meses. Cada barra es
+        una semana.
+      </p>
+
+      {/* Bar chart */}
+      <div className="flex h-40 items-end gap-1.5">
+        {weeks.map((w, wi) => {
+          const pct = w.minutes > 0 ? Math.max(6, (w.minutes / maxWeek) * 100) : 0;
+          return (
+            <div
+              key={wi}
+              className="group relative flex h-full flex-1 items-end"
+              title={`Semana del ${fmtDate(w.start)}: ${w.minutes} min`}
+            >
+              {/* track */}
+              <div className="absolute inset-x-0 bottom-0 top-0 rounded-md bg-card/30" />
+              {/* bar */}
+              <div
+                className={cn(
+                  "relative w-full rounded-md bg-gradient-to-t from-neon-violet to-neon-cyan transition-all group-hover:brightness-125",
+                  w.minutes === 0 && "bg-none"
+                )}
+                style={{ height: `${pct}%` }}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Month axis */}
+      <div className="mt-1.5 flex gap-1.5">
+        {monthLabels.map((label, i) => (
+          <span
+            key={i}
+            className="flex-1 text-center font-mono text-[9px] uppercase tracking-wider text-muted-foreground"
+          >
+            {label}
+          </span>
         ))}
       </div>
-      <div className="mt-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-        <span>Menos</span>
-        {[0, 5, 15, 30, 45].map((m) => (
-          <div key={m} className={cn("size-3 rounded-sm", tone(m))} />
-        ))}
-        <span>Más</span>
+
+      {/* Summary */}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border/40 pt-3 text-[11px] text-muted-foreground">
+        <p>
+          <span className="font-semibold text-foreground">{activeDays}</span> días
+          activos ·{" "}
+          <span className="font-semibold text-foreground">{totalMinutes}</span> min
+          en total
+        </p>
+        <p>
+          Mejor semana:{" "}
+          <span className="font-semibold text-neon-cyan">{bestWeek} min</span>
+        </p>
       </div>
     </HudPanel>
   );
