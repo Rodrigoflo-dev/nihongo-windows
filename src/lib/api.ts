@@ -251,6 +251,20 @@ export type Activity =
     }
   | {
       id: string;
+      kind: "order_sentence";
+      tokens: string[];
+      meaning: string;
+      reading?: string | null;
+      explanation?: string | null;
+    }
+  | {
+      id: string;
+      kind: "match_pairs";
+      prompt: string;
+      pairs: { jp: string; meaning: string; reading?: string | null }[];
+    }
+  | {
+      id: string;
       kind: "summary";
       learned: string[];
     };
@@ -289,6 +303,8 @@ export interface Unit {
   jpTitle: string | null;
   ordering: number;
   lessons: LessonSummary[];
+  examBestScore: number | null;
+  examPassed: boolean;
 }
 
 export interface Course {
@@ -324,6 +340,8 @@ export interface LessonCompletionResponse {
   passed: boolean;
   alreadyCompleted: boolean;
   nextLessonId: number | null;
+  unitId: number;
+  unitCompleted: boolean;
   award: XpAward;
 }
 
@@ -339,11 +357,17 @@ export interface NextLessonInfo {
 }
 
 // Unit exam
+export interface ExamSource {
+  lessonId: number;
+  lessonTitle: string;
+}
+
 export interface UnitExam {
   unitId: number;
   unitTitle: string;
   unitJpTitle: string | null;
   activities: Activity[];
+  sourceLessons: ExamSource[];
   allLessonsComplete: boolean;
   bestScore: number | null;
   lastScore: number | null;
@@ -355,6 +379,8 @@ export interface UnitExamResult {
   passed: boolean;
   previousBest: number | null;
   newBest: boolean;
+  nextUnitId: number | null;
+  nextUnitTitle: string | null;
   award: XpAward;
 }
 

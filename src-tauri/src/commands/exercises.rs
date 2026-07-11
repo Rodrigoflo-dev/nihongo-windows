@@ -22,7 +22,7 @@ use tauri::State;
 
 use crate::db::DbState;
 use crate::error::AppResult;
-use crate::models::{Activity, LessonActivities};
+use crate::models::{Activity, LessonActivities, MatchPair};
 
 /// Real-life situational questions ("en esta situación, ¿qué dices?"). Verified
 /// fixed conversation responses, mixed into every round for practical practice.
@@ -405,22 +405,59 @@ fn catalog_kanji(conn: &Connection, level: &str) -> Vec<Item> {
     rows
 }
 
-/// Pull `n` distinct strings from `pool` excluding `exclude`, using the rng.
+/// Pull `n` distinct distractors, PREFERRING the same-theme `primary` pool (other
+/// items taught in THIS lesson) and only topping up from the broad `fallback`
+/// pool when the lesson doesn't have enough items of its own. This is what keeps
+/// the wrong options ON-TOPIC: in the colors lesson the distractors are other
+/// colors (rojo/azul/negro), not random words like "mes" or "estudiante", so the
+/// learner really has to know the answer instead of picking the only word that
+/// fits the theme. (Rodrigo's #1 request.)
 fn pick_distractors(
     rng: &mut StdRng,
-    pool: &[String],
+    primary: &[String],
+    fallback: &[String],
     exclude: &str,
     n: usize,
 ) -> Vec<String> {
-    let mut candidates: Vec<String> = pool
-        .iter()
-        .filter(|s| !s.is_empty() && s.as_str() != exclude)
-        .cloned()
-        .collect();
-    candidates.sort();
-    candidates.dedup();
-    candidates.shuffle(rng);
-    candidates.into_iter().take(n).collect()
+    let ex = exclude.trim().to_string();
+    let mut chosen: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(ex);
+
+    for pool in [primary, fallback] {
+        if chosen.len() >= n {
+            break;
+        }
+        let mut candidates: Vec<String> = pool
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        candidates.sort();
+        candidates.dedup();
+        candidates.shuffle(rng);
+        for c in candidates {
+            if chosen.len() >= n {
+                break;
+            }
+            if seen.insert(c.clone()) {
+                chosen.push(c);
+            }
+        }
+    }
+    chosen
+}
+
+/// Same-theme distractor pools for a lesson: the primary pools are ONLY the items
+/// taught in this lesson (so wrong answers stay on-topic); the `_fb` fallbacks are
+/// the broad level-wide pools, used just to top up tiny lessons.
+struct DistractorPools {
+    lesson_meanings: Vec<String>,
+    lesson_kanji: Vec<String>,
+    lesson_readings: Vec<String>,
+    meaning_fb: Vec<String>,
+    kanji_fb: Vec<String>,
+    reading_fb: Vec<String>,
 }
 
 fn make_quiz(
@@ -460,7 +497,7 @@ fn build_blank_exercise(
     rng: &mut StdRng,
     idx: usize,
     item: &Item,
-    kanji_pool: &[String],
+    pools: &DistractorPools,
 ) -> Option<Activity> {
     let sentence = item.example_jp.as_ref()?;
     // Needs to be an actual sentence/phrase that CONTAINS the word and is longer
@@ -475,7 +512,7 @@ fn build_blank_exercise(
         .example_meaning
         .clone()
         .unwrap_or_else(|| item.meaning.clone());
-    let distractors = pick_distractors(rng, kanji_pool, &item.jp, 3);
+    let distractors = pick_distractors(rng, &pools.lesson_kanji, &pools.kanji_fb, &item.jp, 3);
     let explanation = format!("{sentence} — {hint}");
     make_quiz(
         rng,
@@ -515,16 +552,14 @@ fn build_exercise(
     idx: usize,
     band: &str,
     item: &Item,
-    meaning_pool: &[String],
-    kanji_pool: &[String],
-    reading_pool: &[String],
+    pools: &DistractorPools,
 ) -> Option<Activity> {
     let id = format!("gen-{band}-{idx}");
     match band {
         // Recognition: see the kanji/word, pick the meaning. 3 options.
         "facil" => {
             let prompt_jp = Some(item.jp.clone());
-            let distractors = pick_distractors(rng, meaning_pool, &item.meaning, 2);
+            let distractors = pick_distractors(rng, &pools.lesson_meanings, &pools.meaning_fb, &item.meaning, 2);
             make_quiz(
                 rng,
                 id,
@@ -537,7 +572,7 @@ fn build_exercise(
         }
         // Production: see the meaning, pick the kanji/word. 4 options.
         "medio" => {
-            let distractors = pick_distractors(rng, kanji_pool, &item.jp, 3);
+            let distractors = pick_distractors(rng, &pools.lesson_kanji, &pools.kanji_fb, &item.jp, 3);
             make_quiz(
                 rng,
                 id,
@@ -552,7 +587,7 @@ fn build_exercise(
         // e.g. 学生→がくせい) else meaning→word with 4 options.
         _ => {
             if !item.reading.is_empty() && item.jp.chars().any(is_kanji_char) {
-                let distractors = pick_distractors(rng, reading_pool, &item.reading, 3);
+                let distractors = pick_distractors(rng, &pools.lesson_readings, &pools.reading_fb, &item.reading, 3);
                 make_quiz(
                     rng,
                     id,
@@ -563,7 +598,7 @@ fn build_exercise(
                     rich_explanation(item),
                 )
             } else {
-                let distractors = pick_distractors(rng, kanji_pool, &item.jp, 3);
+                let distractors = pick_distractors(rng, &pools.lesson_kanji, &pools.kanji_fb, &item.jp, 3);
                 make_quiz(
                     rng,
                     id,
@@ -584,9 +619,9 @@ fn build_listen(
     rng: &mut StdRng,
     idx: usize,
     item: &Item,
-    meaning_pool: &[String],
+    pools: &DistractorPools,
 ) -> Option<Activity> {
-    let mut distractors = pick_distractors(rng, meaning_pool, &item.meaning, 3);
+    let mut distractors = pick_distractors(rng, &pools.lesson_meanings, &pools.meaning_fb, &item.meaning, 3);
     distractors.retain(|d| d != &item.meaning);
     if distractors.is_empty() {
         return None;
@@ -778,7 +813,7 @@ fn build_meaning_to_reading(
     rng: &mut StdRng,
     idx: usize,
     item: &Item,
-    reading_pool: &[String],
+    pools: &DistractorPools,
 ) -> Option<Activity> {
     if item.reading.is_empty()
         || item.reading == item.jp
@@ -786,7 +821,7 @@ fn build_meaning_to_reading(
     {
         return None;
     }
-    let distractors = pick_distractors(rng, reading_pool, &item.reading, 3);
+    let distractors = pick_distractors(rng, &pools.lesson_readings, &pools.reading_fb, &item.reading, 3);
     make_quiz(
         rng,
         format!("gen-mr-{idx}"),
@@ -804,7 +839,7 @@ fn build_reading_to_meaning(
     rng: &mut StdRng,
     idx: usize,
     item: &Item,
-    meaning_pool: &[String],
+    pools: &DistractorPools,
 ) -> Option<Activity> {
     if item.reading.is_empty()
         || item.reading == item.jp
@@ -812,7 +847,7 @@ fn build_reading_to_meaning(
     {
         return None;
     }
-    let distractors = pick_distractors(rng, meaning_pool, &item.meaning, 2);
+    let distractors = pick_distractors(rng, &pools.lesson_meanings, &pools.meaning_fb, &item.meaning, 2);
     make_quiz(
         rng,
         format!("gen-rm-{idx}"),
@@ -822,6 +857,176 @@ fn build_reading_to_meaning(
         distractors,
         rich_explanation(item),
     )
+}
+
+/// "Empareja" — pair Japanese words with their meanings. A distinct, active
+/// format (not another multiple-choice) so practice feels varied.
+fn build_match_pairs(rng: &mut StdRng, idx: usize, items: &[Item]) -> Option<Activity> {
+    let mut pool: Vec<&Item> = items
+        .iter()
+        .filter(|it| !it.jp.is_empty() && !it.meaning.is_empty())
+        .collect();
+    if pool.len() < 3 {
+        return None;
+    }
+    pool.shuffle(rng);
+    // Dedupe by meaning AND by jp so every pairing is unambiguous.
+    let mut seen_m = HashSet::new();
+    let mut seen_j = HashSet::new();
+    let pairs: Vec<MatchPair> = pool
+        .into_iter()
+        .filter(|it| seen_m.insert(it.meaning.clone()) && seen_j.insert(it.jp.clone()))
+        .take(4)
+        .map(|it| MatchPair {
+            jp: it.jp.clone(),
+            meaning: it.meaning.clone(),
+            reading: if it.reading.is_empty() || it.reading == it.jp {
+                None
+            } else {
+                Some(it.reading.clone())
+            },
+        })
+        .collect();
+    if pairs.len() < 3 {
+        return None;
+    }
+    Some(Activity::MatchPairs {
+        id: format!("gen-match-{idx}"),
+        prompt: "Une cada palabra con su significado".to_string(),
+        pairs,
+    })
+}
+
+// Boundary tiles for tokenizing an N5 sentence into word tiles. Greedy longest
+// match against these + the taught vocabulary; if any part can't be matched we
+// simply skip the exercise (so tiles are never wrong).
+const ORDER_PARTICLES: &[&str] = &[
+    "から", "まで", "は", "が", "を", "に", "へ", "で", "と", "も", "の", "か", "ね", "よ",
+];
+const ORDER_ENDINGS: &[&str] = &[
+    "ませんでした",
+    "ましょう",
+    "ですか",
+    "ください",
+    "たいです",
+    "ました",
+    "ません",
+    "でした",
+    "です",
+    "ますか",
+    "ます",
+];
+const ORDER_FUNCTION: &[&str] = &[
+    "私", "あなた", "彼女", "彼", "これ", "それ", "あれ", "この", "その", "あの", "ここ",
+    "そこ", "あそこ", "何", "誰", "どこ", "いつ", "今", "毎日", "とても", "少し", "もう",
+];
+
+/// Every intro-vocab surface (word) taught anywhere — the base dictionary for the
+/// sentence-ordering tokenizer.
+fn all_vocab_surfaces(conn: &Connection) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT activities_json FROM lessons") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for raw in rows.flatten() {
+                if let Ok(parsed) = serde_json::from_str::<LessonActivities>(&raw) {
+                    for a in parsed.activities {
+                        if let Activity::IntroVocab { word, .. } = a {
+                            if !word.is_empty() {
+                                out.push(word);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Candidate tiles, sorted longest-first for greedy matching.
+fn order_dictionary(conn: &Connection, catalog: &[Item]) -> Vec<String> {
+    let mut set: HashSet<String> = HashSet::new();
+    for s in all_vocab_surfaces(conn) {
+        set.insert(s);
+    }
+    for it in catalog {
+        if !it.jp.is_empty() {
+            set.insert(it.jp.clone());
+        }
+    }
+    for s in ORDER_PARTICLES
+        .iter()
+        .chain(ORDER_ENDINGS.iter())
+        .chain(ORDER_FUNCTION.iter())
+    {
+        set.insert((*s).to_string());
+    }
+    let mut v: Vec<String> = set.into_iter().collect();
+    v.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()).then(a.cmp(b)));
+    v
+}
+
+/// Split a sentence into word tiles by greedy longest-match against `dict`.
+/// Returns None if any part can't be matched (so we never show broken tiles).
+fn order_tokenize(sentence: &str, dict: &[String]) -> Option<Vec<String>> {
+    let chars: Vec<char> = sentence
+        .chars()
+        .filter(|c| !matches!(c, '。' | '、' | ' ' | '　' | '！' | '？'))
+        .collect();
+    let mut tokens: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    'outer: while i < chars.len() {
+        for cand in dict {
+            let clen = cand.chars().count();
+            if clen == 0 || i + clen > chars.len() {
+                continue;
+            }
+            if chars[i..i + clen].iter().collect::<String>() == *cand {
+                tokens.push(cand.clone());
+                i += clen;
+                continue 'outer;
+            }
+        }
+        return None;
+    }
+    Some(tokens)
+}
+
+/// "Ordena la frase" — arrange shuffled word tiles into the correct sentence.
+fn build_order_sentence(
+    idx: usize,
+    jp: &str,
+    meaning: &str,
+    dict: &[String],
+) -> Option<Activity> {
+    let tokens = order_tokenize(jp, dict)?;
+    // Need enough tiles to be a real puzzle, but not so many it's tedious.
+    if tokens.len() < 3 || tokens.len() > 7 {
+        return None;
+    }
+    // At least two "content" tiles (not just particles/endings).
+    let content = tokens
+        .iter()
+        .filter(|t| {
+            !ORDER_PARTICLES.contains(&t.as_str()) && !ORDER_ENDINGS.contains(&t.as_str())
+        })
+        .count();
+    if content < 2 {
+        return None;
+    }
+    let clean = meaning
+        .split(['(', '（'])
+        .next()
+        .unwrap_or(meaning)
+        .trim()
+        .to_string();
+    Some(Activity::OrderSentence {
+        id: format!("gen-order-{idx}"),
+        tokens,
+        meaning: clean,
+        reading: None,
+        explanation: Some(format!("{jp} — {meaning}")),
+    })
 }
 
 /// Plausible full-phrase distractors for the "understand the sentence" question,
@@ -849,7 +1054,8 @@ fn build_sentence_comprehension(
     idx: usize,
     jp: &str,
     meaning: &str,
-    phrase_pool: &[String],
+    phrase_primary: &[String],
+    phrase_fb: &[String],
 ) -> Option<Activity> {
     let clean = meaning
         .split(['(', '（'])
@@ -860,7 +1066,7 @@ fn build_sentence_comprehension(
     if clean.is_empty() {
         return None;
     }
-    let distractors = pick_distractors(rng, phrase_pool, &clean, 3);
+    let distractors = pick_distractors(rng, phrase_primary, phrase_fb, &clean, 3);
     make_quiz(
         rng,
         format!("gen-comp-{idx}"),
@@ -901,6 +1107,8 @@ fn modality(a: &Activity) -> &'static str {
         Activity::Listening { .. } => "listen",
         Activity::WriteSentence { .. } => "write",
         Activity::WriteKanji { .. } => "draw",
+        Activity::OrderSentence { .. } => "order",
+        Activity::MatchPairs { .. } => "match",
         Activity::Quiz { id, .. } => {
             if id.starts_with("gen-sit") {
                 "sit"
@@ -931,6 +1139,8 @@ fn band_modality_cap(m: &str, count: usize) -> usize {
         "sit" => 1,
         "gram" => 2,
         "comp" => 2,
+        "order" => 2,
+        "match" => 1,
         _ => count,
     }
 }
@@ -992,7 +1202,7 @@ fn select_band(
 fn arrange(items: Vec<Activity>) -> Vec<Activity> {
     let (special, plain): (Vec<Activity>, Vec<Activity>) = items
         .into_iter()
-        .partition(|a| matches!(modality(a), "listen" | "write" | "draw" | "blank"));
+        .partition(|a| matches!(modality(a), "listen" | "write" | "draw" | "blank" | "order" | "match"));
     let mut out = Vec::with_capacity(special.len() + plain.len());
     let mut pi = 0usize;
     let mut si = 0usize;
@@ -1039,6 +1249,12 @@ fn signature(a: &Activity) -> String {
             prompt, accepted, ..
         } => format!("W|{prompt}|{}", accepted.join("/")),
         Activity::WriteKanji { kanji_char, .. } => format!("D|{kanji_char}"),
+        Activity::OrderSentence { tokens, .. } => format!("O|{}", tokens.join("")),
+        Activity::MatchPairs { pairs, .. } => {
+            let mut jps: Vec<&str> = pairs.iter().map(|p| p.jp.as_str()).collect();
+            jps.sort();
+            format!("M|{}", jps.join(","))
+        }
         _ => "?".to_string(),
     }
 }
@@ -1068,36 +1284,58 @@ pub fn generate(conn: &Connection, lesson_id: i64, seed: u64) -> Vec<GeneratedEx
         return vec![];
     }
 
-    let meaning_pool: Vec<String> = COMMON_MEANINGS
-        .iter()
-        .map(|s| s.to_string())
-        .chain(items.iter().map(|i| i.meaning.clone()))
-        .collect();
-    let kanji_pool: Vec<String> = catalog
-        .iter()
-        .map(|i| i.jp.clone())
-        .chain(items.iter().map(|i| i.jp.clone()))
-        .collect();
-    let reading_pool: Vec<String> = catalog
-        .iter()
-        .map(|i| i.reading.clone())
-        .chain(items.iter().map(|i| i.reading.clone()))
-        .filter(|r| !r.is_empty())
-        .collect();
+    // Distractors are drawn PRIMARILY from this lesson's own items (same theme),
+    // and only topped up from the broad level-wide fallback pools when the lesson
+    // is too small. This keeps every wrong option on-topic. (Rodrigo's #1 fix.)
+    let pools = DistractorPools {
+        lesson_meanings: items.iter().map(|i| i.meaning.clone()).collect(),
+        lesson_kanji: items.iter().map(|i| i.jp.clone()).collect(),
+        lesson_readings: items
+            .iter()
+            .map(|i| i.reading.clone())
+            .filter(|r| !r.is_empty())
+            .collect(),
+        meaning_fb: COMMON_MEANINGS
+            .iter()
+            .map(|s| s.to_string())
+            .chain(items.iter().map(|i| i.meaning.clone()))
+            .collect(),
+        kanji_fb: catalog
+            .iter()
+            .map(|i| i.jp.clone())
+            .chain(items.iter().map(|i| i.jp.clone()))
+            .collect(),
+        reading_fb: catalog
+            .iter()
+            .map(|i| i.reading.clone())
+            .chain(items.iter().map(|i| i.reading.clone()))
+            .filter(|r| !r.is_empty())
+            .collect(),
+    };
 
     let grammar = taught_grammar(conn, lesson_id);
     let sentences = taught_sentences(conn, lesson_id);
     let authored = authored_questions(conn, lesson_id);
-    let taught_surfaces = cumulative_taught_surfaces(conn, lesson_id);
-    let sit_indices = gated_situations(&mut rng, &taught_surfaces);
+    // Situational questions must be ON-TOPIC: only appear when the situation's
+    // phrase is taught in THIS lesson (not cumulatively). Otherwise a greeting
+    // scenario ('¿qué respondes a おはようございます?') would leak into the numbers
+    // lesson just because greetings were taught earlier — off-topic and confusing.
+    let current_surfaces: HashSet<String> = items
+        .iter()
+        .flat_map(|it| {
+            [normalize_phrase(&it.jp), normalize_phrase(&it.reading)]
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    let sit_indices = gated_situations(&mut rng, &current_surfaces);
 
-    // Distractor pool for the "understand the sentence" question: other taught
-    // sentence meanings + generic plausible phrases.
+    // "Understand the sentence": distractors are OTHER taught sentence meanings
+    // from this lesson first (same theme), then generic plausible phrases.
     let clean = |m: &str| {
         m.split(['(', '（']).next().unwrap_or(m).trim().to_string()
     };
-    let mut phrase_pool: Vec<String> = sentences.iter().map(|(_, m)| clean(m)).collect();
-    phrase_pool.extend(GENERIC_PHRASES.iter().map(|s| s.to_string()));
+    let phrase_primary: Vec<String> = sentences.iter().map(|(_, m)| clean(m)).collect();
+    let phrase_fb: Vec<String> = GENERIC_PHRASES.iter().map(|s| s.to_string()).collect();
 
     // ---- Build the candidate pools per band -------------------------------
     let mut facil: Vec<Activity> = Vec::new();
@@ -1107,24 +1345,24 @@ pub fn generate(conn: &Connection, lesson_id: i64, seed: u64) -> Vec<GeneratedEx
 
     for item in &items {
         // fácil — recognition
-        if let Some(a) = build_exercise(&mut rng, idc, "facil", item, &meaning_pool, &kanji_pool, &reading_pool) {
+        if let Some(a) = build_exercise(&mut rng, idc, "facil", item, &pools) {
             facil.push(a);
         }
         idc += 1;
-        if let Some(a) = build_listen(&mut rng, idc, item, &meaning_pool) {
+        if let Some(a) = build_listen(&mut rng, idc, item, &pools) {
             facil.push(a);
         }
         idc += 1;
-        if let Some(a) = build_reading_to_meaning(&mut rng, idc, item, &meaning_pool) {
+        if let Some(a) = build_reading_to_meaning(&mut rng, idc, item, &pools) {
             facil.push(a);
         }
         idc += 1;
         // medio — production
-        if let Some(a) = build_exercise(&mut rng, idc, "medio", item, &meaning_pool, &kanji_pool, &reading_pool) {
+        if let Some(a) = build_exercise(&mut rng, idc, "medio", item, &pools) {
             medio.push(a);
         }
         idc += 1;
-        if let Some(a) = build_meaning_to_reading(&mut rng, idc, item, &reading_pool) {
+        if let Some(a) = build_meaning_to_reading(&mut rng, idc, item, &pools) {
             medio.push(a);
         }
         idc += 1;
@@ -1133,7 +1371,7 @@ pub fn generate(conn: &Connection, lesson_id: i64, seed: u64) -> Vec<GeneratedEx
         }
         idc += 1;
         // difícil — recall / usage
-        if let Some(a) = build_exercise(&mut rng, idc, "dificil", item, &meaning_pool, &kanji_pool, &reading_pool) {
+        if let Some(a) = build_exercise(&mut rng, idc, "dificil", item, &pools) {
             dificil.push(a);
         }
         idc += 1;
@@ -1141,7 +1379,7 @@ pub fn generate(conn: &Connection, lesson_id: i64, seed: u64) -> Vec<GeneratedEx
             dificil.push(a);
         }
         idc += 1;
-        if let Some(a) = build_blank_exercise(&mut rng, idc, item, &kanji_pool) {
+        if let Some(a) = build_blank_exercise(&mut rng, idc, item, &pools) {
             dificil.push(a);
         }
         idc += 1;
@@ -1154,8 +1392,9 @@ pub fn generate(conn: &Connection, lesson_id: i64, seed: u64) -> Vec<GeneratedEx
         }
         idc += 1;
     }
+    let order_dict = order_dictionary(conn, &catalog);
     for (jp, meaning) in &sentences {
-        if let Some(a) = build_sentence_comprehension(&mut rng, idc, jp, meaning, &phrase_pool) {
+        if let Some(a) = build_sentence_comprehension(&mut rng, idc, jp, meaning, &phrase_primary, &phrase_fb) {
             medio.push(a);
         }
         idc += 1;
@@ -1163,7 +1402,18 @@ pub fn generate(conn: &Connection, lesson_id: i64, seed: u64) -> Vec<GeneratedEx
             dificil.push(a);
         }
         idc += 1;
+        // NEW format: arrange the shuffled word tiles into the sentence.
+        if let Some(a) = build_order_sentence(idc, jp, meaning, &order_dict) {
+            dificil.push(a);
+        }
+        idc += 1;
     }
+
+    // NEW format: match Japanese words to their meanings (varies the practice).
+    if let Some(a) = build_match_pairs(&mut rng, idc, &items) {
+        medio.push(a);
+    }
+    idc += 1;
 
     // Real-life situations (already gated to taught phrases): spread facil/medio.
     for (i, &si) in sit_indices.iter().enumerate() {
@@ -1545,27 +1795,139 @@ mod tests {
         );
     }
 
-    /// GUARD for the "me pregunta cosas que no ha enseñado" complaint (おやすみなさい,
-    /// いくらですか in lesson 1): every situational question must use a phrase the
-    /// learner has already been taught, and lesson 1 must have none at all.
+    /// GUARD for the "pregunta que nada que ver" complaint: situational questions
+    /// must be ON-TOPIC — their answer is taught IN THIS LESSON, never leaking a
+    /// greeting scenario into the numbers / これ / はい lessons. Lesson 1 (no
+    /// greetings) has none at all. Uses the cumulative helper as a sanity anchor.
+    /// GUARD for the new practice formats (ordenar la frase / emparejar): tiles
+    /// must be well-formed and the formats must actually appear somewhere.
     #[test]
-    fn situations_only_use_already_taught_phrases() {
+    fn new_formats_are_well_formed() {
         let conn = fresh_db();
+        let mut saw_order = false;
+        let mut saw_match = false;
+        for id in 1..=600 {
+            if taught_items(&conn, id).is_empty() {
+                continue;
+            }
+            for seed in [1u64, 4, 8, 15, 23] {
+                for e in generate(&conn, id, seed) {
+                    match &e.activity {
+                        Activity::OrderSentence { tokens, .. } => {
+                            saw_order = true;
+                            assert!(
+                                (3..=7).contains(&tokens.len()),
+                                "lesson {id}: order tiles out of range: {tokens:?}"
+                            );
+                            assert!(
+                                tokens.iter().all(|t| !t.trim().is_empty()),
+                                "lesson {id}: empty order tile"
+                            );
+                        }
+                        Activity::MatchPairs { pairs, .. } => {
+                            saw_match = true;
+                            assert!(
+                                (3..=4).contains(&pairs.len()),
+                                "lesson {id}: match pairs out of range"
+                            );
+                            let jps: HashSet<_> = pairs.iter().map(|p| &p.jp).collect();
+                            let ms: HashSet<_> = pairs.iter().map(|p| &p.meaning).collect();
+                            assert_eq!(jps.len(), pairs.len(), "match: duplicate jp");
+                            assert_eq!(ms.len(), pairs.len(), "match: duplicate meaning");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert!(saw_order, "no order-sentence exercises were generated anywhere");
+        assert!(saw_match, "no match-pairs exercises were generated anywhere");
+    }
+
+    /// GUARD for Rodrigo's #1 fix: quiz distractors must stay ON-THEME. In a
+    /// meaning-recognition question, every wrong option must be another meaning
+    /// TAUGHT IN THE SAME LESSON — never a random word from a different topic
+    /// (so the colors lesson can't offer "mes"/"estudiante" as the only non-color
+    /// options, giving the answer away). Checked on every lesson that has enough
+    /// items of its own that no generic fallback is needed.
+    #[test]
+    fn distractors_stay_on_theme() {
+        let conn = fresh_db();
+        for id in 1..=600 {
+            let items = taught_items(&conn, id);
+            let meanings: std::collections::HashSet<String> = items
+                .iter()
+                .map(|it| it.meaning.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .collect();
+            // Only assert when the lesson alone can fill a 3-option meaning
+            // question without borrowing from the broad fallback pool.
+            if meanings.len() < 5 {
+                continue;
+            }
+            for seed in [1u64, 5, 13, 27] {
+                for e in generate(&conn, id, seed) {
+                    if let Activity::Quiz { id: qid, options, .. } = &e.activity {
+                        // meaning-answer questions: recognition + reading→meaning
+                        if qid.starts_with("gen-facil") || qid.starts_with("gen-rm") {
+                            for o in options {
+                                assert!(
+                                    meanings.contains(o.trim()),
+                                    "lesson {id}: off-theme distractor '{o}' in {qid} (not a meaning taught in this lesson)"
+                                );
+                            }
+                        }
+                    }
+                    if let Activity::Listening { id: lid, options, .. } = &e.activity {
+                        if lid.starts_with("gen-listen") {
+                            for o in options {
+                                assert!(
+                                    meanings.contains(o.trim()),
+                                    "lesson {id}: off-theme listening distractor '{o}' (not taught here)"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn situations_only_use_current_lesson_phrases() {
+        let conn = fresh_db();
+        let _cumulative = cumulative_taught_surfaces(&conn, 1); // helper still exercised
 
         // Lesson 1 teaches no greetings yet → zero situational questions.
-        let l1 = generate(&conn, 1, 7);
-        let l1_sits = l1
+        let l1_sits = generate(&conn, 1, 7)
             .iter()
             .filter(|e| matches!(&e.activity, Activity::Quiz { id, .. } if id.starts_with("gen-sit")))
             .count();
-        assert_eq!(
-            l1_sits, 0,
-            "lesson 1 must not ask situational greetings it never taught"
-        );
+        assert_eq!(l1_sits, 0, "lesson 1 must not ask situational greetings");
 
-        // Across lessons: any situational question's answer must be taught.
-        for id in 1..=5 {
-            let taught = cumulative_taught_surfaces(&conn, id);
+        // A NUMBERS lesson (301) must never show a greeting situation.
+        for seed in [1u64, 3, 9, 42] {
+            let sits: Vec<_> = generate(&conn, 301, seed)
+                .into_iter()
+                .filter(|e| matches!(&e.activity, Activity::Quiz { id, .. } if id.starts_with("gen-sit")))
+                .collect();
+            assert!(
+                sits.is_empty(),
+                "the numbers lesson (301) must have NO situational greeting questions"
+            );
+        }
+
+        // For every lesson: a situational answer must be taught IN THAT lesson.
+        for id in 1..=600 {
+            let items = taught_items(&conn, id);
+            if items.is_empty() {
+                continue;
+            }
+            let current: std::collections::HashSet<String> = items
+                .iter()
+                .flat_map(|it| [normalize_phrase(&it.jp), normalize_phrase(&it.reading)])
+                .filter(|s| !s.is_empty())
+                .collect();
             for seed in [1u64, 3, 9] {
                 for e in generate(&conn, id, seed) {
                     if let Activity::Quiz {
@@ -1578,8 +1940,8 @@ mod tests {
                         if qid.starts_with("gen-sit") {
                             let correct = normalize_phrase(&options[*correct_index]);
                             assert!(
-                                taught.contains(&correct),
-                                "lesson {id}: situational answer '{correct}' was never taught"
+                                current.contains(&correct),
+                                "lesson {id}: off-topic situational answer '{correct}' (not taught in THIS lesson)"
                             );
                         }
                     }

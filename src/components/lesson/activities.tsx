@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   GraduationCap,
   Info,
@@ -14,6 +16,7 @@ import {
   Square,
   Trophy,
   Volume2,
+  X,
 } from "lucide-react";
 import { toKana, toRomaji } from "wanakana";
 
@@ -53,6 +56,18 @@ function romajiHint(text: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Stable small hash of a string → used to vary a question's PRESENTATION style
+ * deterministically (same question always looks the same, but consecutive
+ * questions differ) so practice doesn't feel like the same card every time. */
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
 }
 
 /** Inline warning shown under a play button when TTS fails (e.g. no JP voice). */
@@ -322,6 +337,24 @@ export function ActivityView({
           onAnswer={onAnswer}
         />
       );
+    case "order_sentence":
+      return (
+        <OrderSentenceActivity
+          key={`${activity.id}-${attempt}`}
+          activity={activity}
+          verified={verified}
+          onAnswer={onAnswer}
+        />
+      );
+    case "match_pairs":
+      return (
+        <MatchPairsActivity
+          key={`${activity.id}-${attempt}`}
+          activity={activity}
+          verified={verified}
+          onAnswer={onAnswer}
+        />
+      );
     case "summary":
       return <SummaryActivity activity={activity} />;
   }
@@ -331,7 +364,9 @@ export function isActivityQuiz(activity: Activity): boolean {
   return (
     activity.kind === "quiz" ||
     activity.kind === "listening" ||
-    activity.kind === "write_sentence"
+    activity.kind === "write_sentence" ||
+    activity.kind === "order_sentence" ||
+    activity.kind === "match_pairs"
   );
 }
 
@@ -360,6 +395,107 @@ function WordChips({
           <p className="mt-0.5 text-xs text-muted-foreground">{w.meaning}</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** A short "why is it used like this?" note shown on the examples page, so the
+ * learner sees the reason next to the sentences (Rodrigo's request). Reuses the
+ * card's already-verified explanation — no new unverified Japanese. */
+function WhyBox({ text }: { text: string }) {
+  return (
+    <div className="mb-3 rounded-xl border border-l-2 border-neon-violet/30 border-l-neon-violet/70 bg-neon-violet/5 p-3">
+      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-neon-violet">
+        なぜ · Por qué se usa así
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-foreground/85">{text}</p>
+    </div>
+  );
+}
+
+/** Examples shown ONE AT A TIME in a clean, centered card with arrows + dots and
+ * a slide animation (Rodrigo asked for a carousel — less cramped, more focused). */
+function ExampleCarousel({
+  items,
+}: {
+  items: { jp: string; reading: string; meaning: string }[];
+}) {
+  const [idx, setIdx] = useState(0);
+  const [dir, setDir] = useState(1);
+  if (items.length === 0) return null;
+  const clamped = Math.min(idx, items.length - 1);
+  const ex = items[clamped];
+  const go = (d: number) => {
+    setDir(d);
+    setIdx((i) => (i + d + items.length) % items.length);
+  };
+  return (
+    <div>
+      <div className="relative overflow-hidden rounded-2xl border border-neon-cyan/25 bg-gradient-to-br from-card/70 to-background/40 p-6 min-h-[10rem]">
+        <span className="hud-corner left-2 top-2 border-l-2 border-t-2 border-neon-cyan/40" />
+        <span className="hud-corner bottom-2 right-2 border-b-2 border-r-2 border-neon-cyan/40" />
+        <AnimatePresence mode="wait" custom={dir}>
+          <motion.div
+            key={clamped}
+            custom={dir}
+            variants={{
+              enter: (d: number) => ({ opacity: 0, x: d * 40 }),
+              center: { opacity: 1, x: 0 },
+              exit: (d: number) => ({ opacity: 0, x: d * -40 }),
+            }}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{ duration: 0.25 }}
+            className="flex flex-col items-center text-center"
+          >
+            <div className="flex items-center gap-3">
+              <p className="font-jp text-2xl leading-snug sm:text-3xl">{ex.jp}</p>
+              <JaSpeakButton text={ex.jp} aria-label={`Escuchar ${ex.jp}`} />
+            </div>
+            <p className="mt-2 font-jp text-sm text-muted-foreground">{ex.reading}</p>
+            <p className="mt-1 text-sm text-foreground/85">{ex.meaning}</p>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {items.length > 1 ? (
+        <div className="mt-3 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => go(-1)}
+            aria-label="Ejemplo anterior"
+            className="grid size-8 place-items-center rounded-full border border-border/50 text-muted-foreground transition-colors hover:border-neon-cyan/60 hover:text-neon-cyan"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+          <div className="flex items-center gap-1.5">
+            {items.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                aria-label={`Ejemplo ${i + 1}`}
+                onClick={() => {
+                  setDir(i > clamped ? 1 : -1);
+                  setIdx(i);
+                }}
+                className={cn(
+                  "h-1.5 rounded-full transition-all",
+                  i === clamped ? "w-5 bg-neon-cyan" : "w-1.5 bg-muted-foreground/30"
+                )}
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => go(1)}
+            aria-label="Ejemplo siguiente"
+            className="grid size-8 place-items-center rounded-full border border-border/50 text-muted-foreground transition-colors hover:border-neon-cyan/60 hover:text-neon-cyan"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -414,7 +550,12 @@ function kanjiPages(note: KanjiNote): DeepDivePage[] {
         { text: lang === "en" ? "Examples:" : "Ejemplos:", lang },
         ...wordSegments(note.examples, lang),
       ],
-      body: <WordChips items={note.examples} />,
+      body: (
+        <div>
+          <WhyBox text={note.usage} />
+          <ExampleCarousel items={note.examples} />
+        </div>
+      ),
     },
   ];
   return pages;
@@ -479,7 +620,12 @@ function grammarPages(note: GrammarNote): DeepDivePage[] {
           { text: lang === "en" ? e.meaningEn ?? e.meaning : e.meaning, lang },
         ]),
       ],
-      body: <WordChips items={note.examples} />,
+      body: (
+        <div>
+          <WhyBox text={note.why} />
+          <ExampleCarousel items={note.examples} />
+        </div>
+      ),
     },
   ];
 }
@@ -521,7 +667,12 @@ function vocabPages(note: VocabNote): DeepDivePage[] {
           { text: lang === "en" ? e.meaningEn : e.meaning, lang },
         ]),
       ],
-      body: <WordChips items={note.examples} />,
+      body: (
+        <div>
+          <WhyBox text={note.usage} />
+          <ExampleCarousel items={note.examples} />
+        </div>
+      ),
     },
   ];
 }
@@ -812,31 +963,172 @@ function QuizActivity({
   const [selectedShuffled, setSelectedShuffled] = useState<number | null>(null);
   const correctIndex = shuffled.findIndex((o) => o.isCorrect);
 
+  // Rotate the PRESENTATION so practice never feels like the same card twice.
+  // Same question always renders the same way (stable), but different questions
+  // get different looks: A/B/C list, a 2-col card grid, or a ✓/✗ true-false.
+  const h = hashStr(activity.id);
+  const canTrueFalse = Boolean(activity.promptJp) && shuffled.length >= 2;
+  const styleName = canTrueFalse
+    ? (["list", "grid", "truefalse"] as const)[h % 3]
+    : (["list", "grid"] as const)[h % 2];
+
+  // --- True/False: claim the prompt equals one option; is it true? ----------
+  const tfClaim = shuffled[h % shuffled.length];
+  const tfIsTrue = tfClaim?.isCorrect ?? false;
+  const [tfPicked, setTfPicked] = useState<boolean | null>(null);
+
+  const wrongForExplain =
+    styleName === "truefalse"
+      ? verified && tfPicked !== null && tfPicked !== tfIsTrue
+      : verified && selectedShuffled !== null && selectedShuffled !== correctIndex;
+
+  const explanation =
+    verified && wrongForExplain && activity.explanation ? (
+      <ExplanationCard
+        correctAnswer={activity.options[activity.correctIndex]}
+        explanation={activity.explanation}
+        onLearn={onLearn}
+        learnTarget={
+          japaneseToken(activity.promptJp) ??
+          japaneseToken(activity.options[activity.correctIndex])
+        }
+      />
+    ) : null;
+
+  const prompt = (
+    <div className="text-center">
+      {activity.promptJp ? (
+        <p
+          className="font-jp text-3xl leading-tight tracking-tight text-foreground"
+          style={{
+            textShadow:
+              "0 0 24px color-mix(in oklch, var(--color-primary) 35%, transparent)",
+          }}
+        >
+          {activity.promptJp}
+        </p>
+      ) : null}
+      <p
+        className={cn(
+          "text-balance text-base text-foreground/85",
+          activity.promptJp ? "mt-4" : ""
+        )}
+      >
+        {activity.prompt}
+      </p>
+    </div>
+  );
+
+  // ---- TRUE / FALSE ---------------------------------------------------------
+  if (styleName === "truefalse") {
+    const pick = (val: boolean) => {
+      if (verified) return;
+      setTfPicked(val);
+      onAnswer(val === tfIsTrue);
+    };
+    const btn = (val: boolean, label: string, Icon: typeof Check) => {
+      const isPicked = tfPicked === val;
+      const isRightChoice = val === tfIsTrue;
+      return (
+        <motion.button
+          whileHover={!verified ? { y: -3 } : undefined}
+          whileTap={!verified ? { scale: 0.97 } : undefined}
+          disabled={verified}
+          onClick={() => pick(val)}
+          className={cn(
+            "flex flex-1 flex-col items-center gap-2 rounded-2xl border-2 px-6 py-6 text-lg font-semibold transition-all",
+            "border-border/60 bg-card/50 hover:border-neon-amber/60 hover:bg-neon-amber/5",
+            isPicked && !verified && "border-primary bg-primary/10 ring-1 ring-primary/40",
+            verified && isRightChoice && "border-success bg-success/15 text-success",
+            verified && isPicked && !isRightChoice && "border-destructive bg-destructive/15 text-destructive",
+            verified && !isRightChoice && !isPicked && "opacity-40"
+          )}
+        >
+          <Icon className="size-7" />
+          {label}
+        </motion.button>
+      );
+    };
+    return (
+      <ActivityShell eyebrow="¿Verdadero o falso?" jp="正しい?">
+        <HudPanel className="p-10">
+          <p className="text-center text-sm text-muted-foreground">
+            ¿Es correcta esta afirmación?
+          </p>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3 }}
+            className="mt-4 rounded-2xl border border-neon-amber/30 bg-neon-amber/5 p-6 text-center"
+          >
+            <p className="font-jp text-3xl leading-tight">{activity.promptJp}</p>
+            <p className="mt-2 text-xl font-semibold">
+              = «{tfClaim.text}»
+            </p>
+          </motion.div>
+          <div className="mt-7 flex gap-3">
+            {btn(true, "Verdadero", Check)}
+            {btn(false, "Falso", X)}
+          </div>
+          {explanation}
+        </HudPanel>
+      </ActivityShell>
+    );
+  }
+
+  // ---- GRID (2-column cards) ------------------------------------------------
+  if (styleName === "grid") {
+    return (
+      <ActivityShell eyebrow="Elige la correcta" jp="選ぶ">
+        <HudPanel className="p-10">
+          {prompt}
+          <div className="mt-7 grid grid-cols-2 gap-3">
+            {shuffled.map((opt, idx) => {
+              const isPicked = selectedShuffled === idx;
+              const romaji = romajiHint(opt.text);
+              return (
+                <motion.button
+                  key={`${activity.id}-g-${idx}`}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.25, delay: idx * 0.05 }}
+                  whileHover={!verified ? { y: -3 } : undefined}
+                  whileTap={!verified ? { scale: 0.97 } : undefined}
+                  disabled={verified}
+                  onClick={() => {
+                    setSelectedShuffled(idx);
+                    onAnswer(opt.isCorrect);
+                  }}
+                  className={cn(
+                    "relative flex min-h-[5.5rem] flex-col items-center justify-center gap-1 rounded-2xl border border-border/60 bg-card/50 p-4 text-center transition-all",
+                    "hover:border-neon-violet/60 hover:bg-neon-violet/5 hover:shadow-[0_0_28px_-10px_color-mix(in_oklch,var(--color-neon-violet)_70%,transparent)]",
+                    isPicked && !verified && "border-primary bg-primary/10 ring-1 ring-primary/40",
+                    verified && opt.isCorrect && "border-success bg-success/15 text-success",
+                    verified && isPicked && !opt.isCorrect && "border-destructive bg-destructive/15 text-destructive",
+                    verified && !opt.isCorrect && !isPicked && "opacity-40"
+                  )}
+                >
+                  <div className="font-jp text-lg">{opt.text}</div>
+                  {romaji ? (
+                    <div className="font-mono text-[11px] text-muted-foreground">
+                      {romaji}
+                    </div>
+                  ) : null}
+                </motion.button>
+              );
+            })}
+          </div>
+          {explanation}
+        </HudPanel>
+      </ActivityShell>
+    );
+  }
+
+  // ---- LIST (A/B/C) — default ----------------------------------------------
   return (
     <ActivityShell eyebrow="Pregunta" jp="質問">
       <HudPanel className="p-10">
-        <div className="text-center">
-          {activity.promptJp ? (
-            <p
-              className="font-jp text-3xl leading-tight tracking-tight text-foreground"
-              style={{
-                textShadow:
-                  "0 0 24px color-mix(in oklch, var(--color-primary) 35%, transparent)",
-              }}
-            >
-              {activity.promptJp}
-            </p>
-          ) : null}
-          <p
-            className={cn(
-              "text-balance text-base text-foreground/85",
-              activity.promptJp ? "mt-4" : ""
-            )}
-          >
-            {activity.prompt}
-          </p>
-        </div>
-
+        {prompt}
         <div className="mt-7 grid gap-3">
           {shuffled.map((opt, idx) => {
             const isPicked = selectedShuffled === idx;
@@ -844,6 +1136,9 @@ function QuizActivity({
             return (
               <motion.button
                 key={`${activity.id}-${idx}`}
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.25, delay: idx * 0.05 }}
                 whileHover={!verified ? { x: 4 } : undefined}
                 whileTap={!verified ? { scale: 0.99 } : undefined}
                 disabled={verified}
@@ -883,21 +1178,7 @@ function QuizActivity({
             );
           })}
         </div>
-
-        {verified &&
-        selectedShuffled !== null &&
-        selectedShuffled !== correctIndex &&
-        activity.explanation ? (
-          <ExplanationCard
-            correctAnswer={activity.options[activity.correctIndex]}
-            explanation={activity.explanation}
-            onLearn={onLearn}
-            learnTarget={
-              japaneseToken(activity.promptJp) ??
-              japaneseToken(activity.options[activity.correctIndex])
-            }
-          />
-        ) : null}
+        {explanation}
       </HudPanel>
     </ActivityShell>
   );
@@ -1570,6 +1851,244 @@ function WriteSentenceActivity({
           </div>
         ) : null}
        </div>
+      </HudPanel>
+    </ActivityShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8b. Order the sentence (tap tiles into order) — a new, active format.
+// ---------------------------------------------------------------------------
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function OrderSentenceActivity({
+  activity,
+  verified,
+  onAnswer,
+}: {
+  activity: Extract<Activity, { kind: "order_sentence" }>;
+  verified: boolean;
+  onAnswer: (correct: boolean) => void;
+}) {
+  const tiles = useMemo(
+    () => shuffleArray(activity.tokens.map((text, i) => ({ id: i, text }))),
+    [activity]
+  );
+  const target = activity.tokens.join("");
+  const [placed, setPlaced] = useState<number[]>([]);
+  const placedSet = new Set(placed);
+  const built = placed.map((id) => tiles.find((t) => t.id === id)!.text).join("");
+  const isComplete = placed.length === tiles.length;
+  const isCorrect = isComplete && built === target;
+
+  const add = (id: number) => {
+    if (verified) return;
+    const next = [...placed, id];
+    setPlaced(next);
+    if (next.length === tiles.length) {
+      const s = next.map((i) => tiles.find((t) => t.id === i)!.text).join("");
+      onAnswer(s === target);
+    }
+  };
+  const removeAt = (pos: number) => {
+    if (verified) return;
+    setPlaced(placed.filter((_, i) => i !== pos));
+  };
+
+  return (
+    <ActivityShell eyebrow="Ordena la frase" jp="文をならべよう">
+      <HudPanel className="p-8">
+        <p className="text-center text-sm text-muted-foreground">
+          Toca las fichas en orden para formar:
+        </p>
+        <p className="mt-1 text-center text-lg font-semibold">«{activity.meaning}»</p>
+
+        {/* Answer row */}
+        <div
+          className={cn(
+            "mt-5 flex min-h-[3.75rem] flex-wrap items-center gap-2 rounded-2xl border-2 border-dashed p-3 transition-colors",
+            verified && isCorrect && "border-success/50 bg-success/5",
+            verified && !isCorrect && "border-destructive/50 bg-destructive/5",
+            !verified && "border-border/50 bg-card/30"
+          )}
+        >
+          {placed.length === 0 ? (
+            <span className="px-2 text-sm text-muted-foreground/60">
+              Tu frase aparecerá aquí…
+            </span>
+          ) : (
+            placed.map((id, pos) => (
+              <button
+                key={`${id}-${pos}`}
+                onClick={() => removeAt(pos)}
+                disabled={verified}
+                className="rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 font-jp text-lg text-foreground transition-colors hover:border-destructive/50 hover:bg-destructive/10"
+              >
+                {tiles.find((t) => t.id === id)!.text}
+              </button>
+            ))
+          )}
+        </div>
+
+        {/* Available tiles */}
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {tiles.map((t) => (
+            <motion.button
+              key={t.id}
+              layout
+              whileTap={!verified ? { scale: 0.94 } : undefined}
+              onClick={() => add(t.id)}
+              disabled={verified || placedSet.has(t.id)}
+              className={cn(
+                "rounded-xl border border-neon-cyan/40 bg-card/60 px-4 py-2.5 font-jp text-lg transition-all hover:border-neon-cyan hover:bg-neon-cyan/10",
+                placedSet.has(t.id) && "pointer-events-none opacity-25"
+              )}
+            >
+              {t.text}
+            </motion.button>
+          ))}
+        </div>
+
+        {verified ? (
+          <div className="mt-6 space-y-3">
+            <div
+              className={cn(
+                "rounded-xl border p-3 text-sm font-medium",
+                isCorrect
+                  ? "border-success/40 bg-success/10 text-success"
+                  : "border-destructive/30 bg-destructive/10 text-destructive"
+              )}
+            >
+              {isCorrect ? "¡Perfecto! Orden correcto 🎉" : "No es el orden correcto."}
+            </div>
+            <div className="rounded-xl border border-success/30 bg-success/5 p-3 text-center">
+              <p className="text-[10px] uppercase tracking-widest text-success">
+                Versión correcta
+              </p>
+              <div className="mt-1 flex items-center justify-center gap-2">
+                <p className="font-jp text-xl">{target}</p>
+                <JaSpeakButton text={target} aria-label={`Escuchar ${target}`} />
+              </div>
+              {activity.reading ? (
+                <p className="mt-1 font-jp text-xs text-muted-foreground">
+                  {activity.reading}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </HudPanel>
+    </ActivityShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8c. Match pairs (tap Japanese ↔ meaning) — a new, active format.
+// ---------------------------------------------------------------------------
+
+function MatchPairsActivity({
+  activity,
+  verified,
+  onAnswer,
+}: {
+  activity: Extract<Activity, { kind: "match_pairs" }>;
+  verified: boolean;
+  onAnswer: (correct: boolean) => void;
+}) {
+  const left = useMemo(
+    () => shuffleArray(activity.pairs.map((p, i) => ({ i, text: p.jp }))),
+    [activity]
+  );
+  const right = useMemo(
+    () => shuffleArray(activity.pairs.map((p, i) => ({ i, text: p.meaning }))),
+    [activity]
+  );
+  const [selJp, setSelJp] = useState<number | null>(null);
+  const [matched, setMatched] = useState<Set<number>>(new Set());
+  const [wrongPair, setWrongPair] = useState<[number, number] | null>(null);
+  const [mistakes, setMistakes] = useState(0);
+
+  const pickJp = (i: number) => {
+    if (verified || matched.has(i)) return;
+    setSelJp(i);
+    setWrongPair(null);
+  };
+  const pickMeaning = (i: number) => {
+    if (verified || matched.has(i) || selJp === null) return;
+    if (selJp === i) {
+      const next = new Set(matched).add(i);
+      setMatched(next);
+      setSelJp(null);
+      if (next.size === activity.pairs.length) onAnswer(mistakes === 0);
+    } else {
+      setWrongPair([selJp, i]);
+      setMistakes((m) => m + 1);
+      setSelJp(null);
+    }
+  };
+
+  const cell = (
+    side: "jp" | "meaning",
+    i: number,
+    text: string
+  ) => {
+    const isMatched = matched.has(i);
+    const isSel = side === "jp" && selJp === i;
+    const isWrong = wrongPair !== null && wrongPair[side === "jp" ? 0 : 1] === i;
+    return (
+      <motion.button
+        key={`${side}-${i}`}
+        animate={isWrong ? { x: [0, -6, 6, -4, 4, 0] } : {}}
+        transition={{ duration: 0.35 }}
+        onClick={() => (side === "jp" ? pickJp(i) : pickMeaning(i))}
+        disabled={verified || isMatched}
+        className={cn(
+          "w-full rounded-xl border px-4 py-3 text-center transition-all",
+          side === "jp" ? "font-jp text-lg" : "text-sm",
+          isMatched && "border-success/50 bg-success/10 text-success opacity-70",
+          !isMatched && isSel && "border-primary bg-primary/15 ring-1 ring-primary/40",
+          !isMatched && !isSel && "border-border/60 bg-card/50 hover:border-neon-violet/60 hover:bg-neon-violet/5"
+        )}
+      >
+        {text}
+      </motion.button>
+    );
+  };
+
+  return (
+    <ActivityShell eyebrow="Empareja" jp="えらんでつなぐ">
+      <HudPanel className="p-8">
+        <p className="text-center text-sm text-muted-foreground">{activity.prompt}</p>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            {left.map((l) => cell("jp", l.i, l.text))}
+          </div>
+          <div className="space-y-2">
+            {right.map((r) => cell("meaning", r.i, r.text))}
+          </div>
+        </div>
+        {verified ? (
+          <div
+            className={cn(
+              "mt-5 rounded-xl border p-3 text-center text-sm font-medium",
+              mistakes === 0
+                ? "border-success/40 bg-success/10 text-success"
+                : "border-warning/40 bg-warning/10 text-warning"
+            )}
+          >
+            {mistakes === 0
+              ? "¡Todos correctos a la primera! 🎉"
+              : `Emparejados — con ${mistakes} intento${mistakes === 1 ? "" : "s"} fallido${mistakes === 1 ? "" : "s"}.`}
+          </div>
+        ) : null}
       </HudPanel>
     </ActivityShell>
   );

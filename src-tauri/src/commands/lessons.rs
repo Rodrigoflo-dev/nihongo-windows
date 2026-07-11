@@ -71,6 +71,15 @@ fn list_units_for_course(c: &Connection, course_id: i64) -> AppResult<Vec<Unit>>
     let mut units = Vec::new();
     for (uid, title, description, jp_title, ordering) in unit_rows {
         let lessons = list_lessons_for_unit(c, uid)?;
+        let exam_best_score: Option<i64> = c
+            .query_row(
+                "SELECT best_score FROM unit_exam_progress WHERE unit_id = ?1",
+                [uid],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        let exam_passed = exam_best_score.map_or(false, |s| s >= 70);
         units.push(Unit {
             id: uid,
             title,
@@ -78,6 +87,8 @@ fn list_units_for_course(c: &Connection, course_id: i64) -> AppResult<Vec<Unit>>
             jp_title,
             ordering,
             lessons,
+            exam_best_score,
+            exam_passed,
         });
     }
     Ok(units)
@@ -300,11 +311,41 @@ pub fn complete_lesson(
 
         let next_lesson_id = next_lesson_after(c, result.lesson_id)?;
 
+        // Which unit is this? And did finishing this lesson complete the unit?
+        let unit_id: i64 = c
+            .query_row(
+                "SELECT unit_id FROM lessons WHERE id = ?1",
+                [result.lesson_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let unit_completed = {
+            let total: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM lessons WHERE unit_id = ?1",
+                    [unit_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let done: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM lessons l
+                       JOIN lesson_progress p ON p.lesson_id = l.id
+                      WHERE l.unit_id = ?1 AND p.status = 'completed'",
+                    [unit_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            total > 0 && done >= total
+        };
+
         Ok(LessonCompletionResponse {
             score,
             passed,
             already_completed: already,
             next_lesson_id,
+            unit_id,
+            unit_completed,
             award: XpAward {
                 xp_amount: xp_awarded + outcome.xp_awarded,
                 star_amount: star_awarded + outcome.stars_awarded,
