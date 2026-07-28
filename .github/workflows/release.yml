@@ -46,15 +46,15 @@ jobs:
         with:
           # When triggered by a `v*` tag, this creates a GitHub Release with that name
           tagName: ${{ github.ref_name }}
-          releaseName: "Nihongo ${{ github.ref_name }}"
+          releaseName: "Michi ${{ github.ref_name }} (Windows)"
           releaseBody: |
             ## Descarga
 
-            - **Windows installer (recomendado)** → `Nihongo_*-setup.exe`
-            - **Windows MSI** → `Nihongo_*.msi`
+            - **Instalador de Windows (recomendado)** → `Michi_*-setup.exe`
+            - **MSI de Windows** → `Michi_*.msi`
 
             ### Primera apertura
-            Windows te dirá "no se reconoce este editor". Pulsa **"Más información" → "Ejecutar de todas formas"**.
+            Windows te dirá "no se reconoce este editor". Pulsa **"Más información" → "Ejecutar de todas formas"**. (La app no está firmada con un certificado de pago, pero es segura.)
 
             ### Datos locales
             Tu base de datos vive en `%APPDATA%\com.nihongo.app\nihongo.db`. Cada usuario es independiente.
